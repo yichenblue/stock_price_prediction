@@ -1,6 +1,10 @@
+import os
+
 from cross_market_transformer import ModelConfig, TrainConfig
 
-DATASET_ROOT = "dataset"
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", ".")
+
+DATASET_ROOT = os.path.join(PROJECT_ROOT, "dataset")
 HK_LOOKBACK = 30
 US_LOOKBACK = 10
 TARGET_COL = "r1"
@@ -31,7 +35,7 @@ TRAIN_CONFIG = TrainConfig(
     weight_decay=1e-4,
     grad_clip_norm=1.0,
     early_stopping_patience=5,
-    checkpoint_dir="checkpoints",
+    checkpoint_dir=os.path.join(PROJECT_ROOT, "checkpoints"),
     checkpoint_name="cross_market_transformer.pt",
     scheduler_type="plateau",
     plot_history=True,
