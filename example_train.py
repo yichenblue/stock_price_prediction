@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import torch
+from torch.utils.data import DataLoader
+
+from cross_market_transformer import (
+    CrossMarketTransformerModel,
+    Trainer,
+    build_multi_company_dataset,
+    chronological_split,
+    numpy_collate_fn,
+)
+from minimal_config import (
+    HK_EXCEL_PATH,
+    HK_LOOKBACK,
+    MODEL_CONFIG,
+    TARGET_COL,
+    TRAIN_CONFIG,
+    USE_US_PREV_NIGHT,
+    US_EXCEL_PATH,
+    US_LOOKBACK,
+)
+
+
+def main() -> None:
+    model_config = MODEL_CONFIG
+    train_config = TRAIN_CONFIG
+
+    dataset = build_multi_company_dataset(
+        company_specs=[
+            {
+                "company_id": 0,
+                "hk_path": HK_EXCEL_PATH,
+                "us_path": US_EXCEL_PATH,
+            }
+        ],
+        hk_lookback=HK_LOOKBACK,
+        us_lookback=US_LOOKBACK,
+        task_type=model_config.task_type,
+        target_col=TARGET_COL,
+        multiclass_num_classes=model_config.num_classes,
+        use_us_prev_night=USE_US_PREV_NIGHT,
+    )
+    train_set, val_set, test_set = chronological_split(dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
+
+    train_loader = DataLoader(
+        train_set,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        num_workers=train_config.num_workers,
+        collate_fn=numpy_collate_fn,
+    )
+    val_loader = DataLoader(
+        val_set,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        num_workers=train_config.num_workers,
+        collate_fn=numpy_collate_fn,
+    )
+    test_loader = DataLoader(
+        test_set,
+        batch_size=train_config.batch_size,
+        shuffle=False,
+        num_workers=train_config.num_workers,
+        collate_fn=numpy_collate_fn,
+    )
+
+    model = CrossMarketTransformerModel(model_config)
+    trainer = Trainer(
+        model=model,
+        train_config=train_config,
+        task_type=model_config.task_type,
+        num_classes=model_config.num_classes,
+    )
+
+    fit_result = trainer.fit(train_loader, val_loader, test_loader=test_loader)
+    test_metrics = trainer.evaluate(test_loader)
+
+    print("Best validation loss:", fit_result["best_val_loss"])
+    print("Test metrics:", test_metrics)
+
+
+if __name__ == "__main__":
+    torch.manual_seed(42)
+    main()
