@@ -24,6 +24,12 @@ from cross_market_transformer import CrossMarketDataset, CrossMarketTransformerM
 from cross_market_transformer import ModelConfig, TrainConfig, Trainer
 ```
 
+Install dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
 Expected sample fields:
 
 - `x_hk`: `[num_samples, hk_seq_len, hk_input_dim]`
@@ -60,3 +66,4 @@ Notes:
   - `hk_us_concat`
   - `hk_transformer_only`
   - `cross_market_transformer`
+- Paths are local by default and can be redirected in Colab by setting `PROJECT_ROOT`.
