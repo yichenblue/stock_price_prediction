@@ -1,7 +1,6 @@
 from cross_market_transformer import ModelConfig, TrainConfig
 
-HK_EXCEL_PATH = "/Users/yichenwang/Downloads/09988_Factors_Standardized.xlsx"
-US_EXCEL_PATH = "/Users/yichenwang/Downloads/BABA_Factors_Standardized.xlsx"
+DATASET_ROOT = "dataset"
 HK_LOOKBACK = 30
 US_LOOKBACK = 10
 TARGET_COL = "r1"
@@ -21,7 +20,7 @@ MODEL_CONFIG = ModelConfig(
     num_layers_us=2,
     num_fusion_layers=1,
     head_hidden_dim=64,
-    dropout=0.1,
+    dropout=0.25,
 )
 
 

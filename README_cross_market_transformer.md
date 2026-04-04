@@ -35,6 +35,8 @@ Expected sample fields:
 Notes:
 
 - Splits are chronological only through `chronological_split`.
+- Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Standardized.xlsx` inputs.
+- Multi-company train/val/test splitting is done per company first, then merged across companies.
 - Company-specific prediction heads sit on top of a shared backbone.
 - Padding masks are supported for future variable-length sequence handling.
 - The Excel loader supports your current files such as `09988_Factors_Standardized.xlsx` and `BABA_Factors_Standardized.xlsx`.

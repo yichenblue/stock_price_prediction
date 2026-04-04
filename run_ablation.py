@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 
 import torch
 from torch.utils.data import DataLoader
@@ -11,46 +12,42 @@ from cross_market_transformer import (
     HKTransformerOnlyModel,
     HKUSConcatBaseline,
     Trainer,
-    build_multi_company_dataset,
-    chronological_split,
+    build_multi_company_splits,
+    discover_standardized_pairs,
     numpy_collate_fn,
 )
 from minimal_config import (
-    HK_EXCEL_PATH,
+    DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
     TARGET_COL,
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
-    US_EXCEL_PATH,
     US_LOOKBACK,
 )
 
 
 def make_dataloaders():
-    dataset = build_multi_company_dataset(
-        company_specs=[
-            {
-                "company_id": 0,
-                "hk_path": HK_EXCEL_PATH,
-                "us_path": US_EXCEL_PATH,
-            }
-        ],
+    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    train_set, val_set, test_set = build_multi_company_splits(
+        company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
+        train_ratio=0.7,
+        val_ratio=0.15,
+        test_ratio=0.15,
         task_type=MODEL_CONFIG.task_type,
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
     )
-    train_set, val_set, test_set = chronological_split(dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
     loader_kwargs = {
         "batch_size": TRAIN_CONFIG.batch_size,
         "shuffle": False,
         "num_workers": TRAIN_CONFIG.num_workers,
         "collate_fn": numpy_collate_fn,
     }
-    return (
+    return company_specs, (
         DataLoader(train_set, **loader_kwargs),
         DataLoader(val_set, **loader_kwargs),
         DataLoader(test_set, **loader_kwargs),
@@ -68,14 +65,21 @@ def build_experiments():
 
 def main() -> None:
     torch.manual_seed(42)
-    train_loader, val_loader, test_loader = make_dataloaders()
+    company_specs, (train_loader, val_loader, test_loader) = make_dataloaders()
+    print("Loaded company pairs:")
+    for spec in company_specs:
+        print(
+            f"  [{spec['company_id']:02d}] {spec['company_name']}: "
+            f"HK={spec['hk_path']} | US={spec['us_path']}"
+        )
+    print()
 
     results = []
     for exp_name, model_cls in build_experiments():
         print("=" * 100)
         print(f"Running experiment: {exp_name}")
 
-        model_config = deepcopy(MODEL_CONFIG)
+        model_config = replace(deepcopy(MODEL_CONFIG), num_companies=len(company_specs))
         train_config = deepcopy(TRAIN_CONFIG)
         train_config.checkpoint_name = f"{exp_name}.pt"
         train_config.history_plot_name = f"{exp_name}_history.png"

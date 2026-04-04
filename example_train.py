@@ -1,47 +1,53 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import torch
 from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
     CrossMarketTransformerModel,
     Trainer,
-    build_multi_company_dataset,
-    chronological_split,
+    build_multi_company_splits,
+    discover_standardized_pairs,
     numpy_collate_fn,
 )
 from minimal_config import (
-    HK_EXCEL_PATH,
+    DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
     TARGET_COL,
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
-    US_EXCEL_PATH,
     US_LOOKBACK,
 )
 
 
 def main() -> None:
-    model_config = MODEL_CONFIG
+    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    print("Loaded company pairs:")
+    for spec in company_specs:
+        print(
+            f"  [{spec['company_id']:02d}] {spec['company_name']}: "
+            f"HK={spec['hk_path']} | US={spec['us_path']}"
+        )
+    print()
+
+    model_config = replace(MODEL_CONFIG, num_companies=len(company_specs))
     train_config = TRAIN_CONFIG
 
-    dataset = build_multi_company_dataset(
-        company_specs=[
-            {
-                "company_id": 0,
-                "hk_path": HK_EXCEL_PATH,
-                "us_path": US_EXCEL_PATH,
-            }
-        ],
+    train_set, val_set, test_set = build_multi_company_splits(
+        company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
+        train_ratio=0.7,
+        val_ratio=0.15,
+        test_ratio=0.15,
         task_type=model_config.task_type,
         target_col=TARGET_COL,
         multiclass_num_classes=model_config.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
     )
-    train_set, val_set, test_set = chronological_split(dataset, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
 
     train_loader = DataLoader(
         train_set,
@@ -78,6 +84,7 @@ def main() -> None:
 
     print("Best validation loss:", fit_result["best_val_loss"])
     print("Test metrics:", test_metrics)
+    print("Number of company pairs:", len(company_specs))
 
 
 if __name__ == "__main__":

@@ -399,6 +399,105 @@ def build_multi_company_dataset(
     )
 
 
+def build_multi_company_splits(
+    company_specs: Sequence[dict],
+    hk_lookback: int,
+    us_lookback: int,
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15,
+    test_ratio: float = 0.15,
+    task_type: str = "binary_classification",
+    target_col: str = "r1",
+    multiclass_num_classes: int = 3,
+    multiclass_thresholds: Sequence[float] | None = None,
+    use_us_prev_night: bool = True,
+) -> tuple[CrossMarketDataset, CrossMarketDataset, CrossMarketDataset]:
+    if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0):
+        raise ValueError("Split ratios must sum to 1.0.")
+
+    split_parts: dict[str, list[dict[str, np.ndarray]]] = {"train": [], "val": [], "test": []}
+    array_keys = (
+        "x_hk",
+        "x_us",
+        "hk_time_delta",
+        "us_time_delta",
+        "company_id",
+        "us_open_prev_night",
+        "us_sessions_since_last_hk",
+        "latest_us_gap_days",
+        "target",
+    )
+
+    for spec in company_specs:
+        samples = build_samples_from_excel_pair(
+            hk_path=spec["hk_path"],
+            us_path=spec["us_path"],
+            hk_lookback=hk_lookback,
+            us_lookback=us_lookback,
+            company_id=spec["company_id"],
+            task_type=task_type,
+            target_col=target_col,
+            multiclass_num_classes=multiclass_num_classes,
+            multiclass_thresholds=multiclass_thresholds,
+            use_us_prev_night=use_us_prev_night,
+        )
+        total = len(samples["target"])
+        train_end = int(total * train_ratio)
+        val_end = train_end + int(total * val_ratio)
+        split_slices = {
+            "train": slice(0, train_end),
+            "val": slice(train_end, val_end),
+            "test": slice(val_end, total),
+        }
+        for split_name, split_slice in split_slices.items():
+            part = {key: samples[key][split_slice] for key in array_keys}
+            split_parts[split_name].append(part)
+
+    return (
+        _concat_dataset_parts(split_parts["train"]),
+        _concat_dataset_parts(split_parts["val"]),
+        _concat_dataset_parts(split_parts["test"]),
+    )
+
+
+def discover_standardized_pairs(dataset_root: str | Path) -> list[dict[str, str | int]]:
+    dataset_root = Path(dataset_root)
+    if not dataset_root.exists():
+        raise ValueError(f"Dataset root does not exist: {dataset_root}")
+
+    company_specs = []
+    company_id = 0
+    for company_dir in sorted(path for path in dataset_root.iterdir() if path.is_dir() and path.name != "__MACOSX"):
+        standardized_files = sorted(company_dir.glob("*_Standardized.xlsx"))
+        hk_files = [path for path in standardized_files if ".HK_" in path.name or path.name.startswith("0")]
+        us_files = [path for path in standardized_files if path not in hk_files]
+        if len(hk_files) != 1 or len(us_files) != 1:
+            raise ValueError(
+                f"Expected exactly one HK and one US standardized file in {company_dir}, "
+                f"got hk={len(hk_files)}, us={len(us_files)}."
+            )
+        company_specs.append(
+            {
+                "company_id": company_id,
+                "company_name": company_dir.name,
+                "hk_path": str(hk_files[0]),
+                "us_path": str(us_files[0]),
+            }
+        )
+        company_id += 1
+    if not company_specs:
+        raise ValueError(f"No company pairs found under {dataset_root}.")
+    return company_specs
+
+
+def _concat_dataset_parts(parts: Sequence[dict[str, np.ndarray]]) -> CrossMarketDataset:
+    if not parts:
+        raise ValueError("No dataset parts provided.")
+    keys = parts[0].keys()
+    merged = {key: np.concatenate([part[key] for part in parts], axis=0) for key in keys}
+    return CrossMarketDataset(**merged)
+
+
 def _build_target(
     target_value: float,
     task_type: str,

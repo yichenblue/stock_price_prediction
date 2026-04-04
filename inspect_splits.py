@@ -1,17 +1,17 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 
 import numpy as np
 
-from cross_market_transformer import build_samples_from_excel_pair
+from cross_market_transformer import build_multi_company_splits, discover_standardized_pairs
 from minimal_config import (
-    HK_EXCEL_PATH,
+    DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
     TARGET_COL,
     USE_US_PREV_NIGHT,
-    US_EXCEL_PATH,
     US_LOOKBACK,
 )
 
@@ -52,33 +52,27 @@ def summarize_split(name: str, values: np.ndarray) -> None:
 
 
 def main() -> None:
-    samples = build_samples_from_excel_pair(
-        hk_path=HK_EXCEL_PATH,
-        us_path=US_EXCEL_PATH,
+    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    train_set, val_set, test_set = build_multi_company_splits(
+        company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
-        company_id=0,
+        train_ratio=0.7,
+        val_ratio=0.15,
+        test_ratio=0.15,
         task_type="regression",
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
     )
+    train_targets = train_set.target.numpy().astype(np.float64)
+    val_targets = val_set.target.numpy().astype(np.float64)
+    test_targets = test_set.target.numpy().astype(np.float64)
 
-    targets = np.asarray(samples["target"], dtype=np.float64)
-    dates = np.asarray(samples["sample_dates"])
-    total = len(targets)
-
-    train_end = int(total * 0.7)
-    val_end = train_end + int(total * 0.15)
-
-    train_targets = targets[:train_end]
-    val_targets = targets[train_end:val_end]
-    test_targets = targets[val_end:]
-
-    print("Split date ranges")
-    print(f"  train: {dates[0]} -> {dates[train_end - 1]}")
-    print(f"  val  : {dates[train_end]} -> {dates[val_end - 1]}")
-    print(f"  test : {dates[val_end]} -> {dates[-1]}")
+    print(f"Number of company pairs: {len(company_specs)}")
+    print(f"Train samples: {len(train_set)}")
+    print(f"Val samples  : {len(val_set)}")
+    print(f"Test samples : {len(test_set)}")
     print()
 
     summarize_split("train", train_targets)
