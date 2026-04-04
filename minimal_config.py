@@ -8,7 +8,7 @@ DATASET_ROOT = os.path.join(PROJECT_ROOT, "dataset")
 HK_LOOKBACK = 30
 US_LOOKBACK = 10
 TARGET_COL = "r1"
-USE_US_PREV_NIGHT = False
+USE_US_PREV_NIGHT = True
 
 MODEL_CONFIG = ModelConfig(
     hk_input_dim=28,
