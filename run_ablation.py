@@ -60,7 +60,16 @@ def _with_shared_company_id(dataset: CrossMarketDataset) -> CrossMarketDataset:
 def split_company_specs(company_specs):
     base_specs = [spec for spec in company_specs if spec["company_name"] not in HELD_OUT_SHARED_HEAD_COMPANIES]
     held_out_specs = [spec for spec in company_specs if spec["company_name"] in HELD_OUT_SHARED_HEAD_COMPANIES]
+    base_specs = _reindex_company_specs(base_specs)
+    held_out_specs = _reindex_company_specs(held_out_specs)
     return base_specs, held_out_specs
+
+
+def _reindex_company_specs(company_specs):
+    remapped = []
+    for new_id, spec in enumerate(company_specs):
+        remapped.append({**spec, "company_id": new_id})
+    return remapped
 
 
 def make_standard_dataloaders(company_specs):
