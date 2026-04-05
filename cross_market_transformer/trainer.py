@@ -72,6 +72,26 @@ class Trainer:
         checkpoint_path = self.train_config.checkpoint_path()
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
+        initial_train_result = self._run_epoch(train_loader, training=False)
+        initial_val_result = self._run_epoch(val_loader, training=False) if val_loader is not None else None
+        initial_test_result = self._run_epoch(test_loader, training=False) if test_loader is not None else None
+        history["train"].append({"loss": initial_train_result.loss, **initial_train_result.metrics})
+        if initial_val_result is not None:
+            history["val"].append({"loss": initial_val_result.loss, **initial_val_result.metrics})
+        if initial_test_result is not None:
+            history["test"].append({"loss": initial_test_result.loss, **initial_test_result.metrics})
+        self._log_epoch(
+            0,
+            initial_train_result,
+            initial_val_result,
+            train_optimization_loss=None,
+            test_result=initial_test_result,
+        )
+
+        initial_score = initial_val_result.loss if initial_val_result is not None else initial_train_result.loss
+        best_score = initial_score
+        self._save_checkpoint(checkpoint_path, 0, best_score)
+
         for epoch in range(1, self.train_config.num_epochs + 1):
             train_optimization_result = self._run_epoch(train_loader, training=True)
             train_result = self._run_epoch(train_loader, training=False)
@@ -304,7 +324,7 @@ class Trainer:
         train_history = history["train"]
         val_history = history.get("val")
         test_history = history.get("test")
-        epochs = list(range(1, len(train_history) + 1))
+        epochs = list(range(len(train_history)))
 
         metric_names = self._plot_metric_names(train_history[0])
         n_metrics = len(metric_names)

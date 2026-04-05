@@ -30,7 +30,7 @@ MODEL_CONFIG = ModelConfig(
 
 TRAIN_CONFIG = TrainConfig(
     batch_size=64,
-    num_epochs=50,
+    num_epochs=75,
     learning_rate=5e-4,
     weight_decay=1e-4,
     grad_clip_norm=1.0,
