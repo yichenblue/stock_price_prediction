@@ -16,6 +16,7 @@ Modules:
 - `example_train.py`
 - `minimal_config.py`
 - `run_ablation.py`
+- `run_shared_head.py`
 
 Minimal usage:
 
@@ -61,10 +62,12 @@ Notes:
   - the most recent completed US session is excluded
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
-- `run_ablation.py` compares four settings with the same data split and trainer:
+- `run_ablation.py` compares three standard settings with the same data split and trainer:
   - `hk_us_concat`
   - `hk_transformer_only`
-  - `cross_market_shared_head`
   - `cross_market_transformer`
-- In the current ablation setup, `cross_market_shared_head` uses all legacy-company samples for training, no validation split, and uses `zai_lab` plus `noah` only as a held-out test set.
+- `run_shared_head.py` runs the shared-head generalization experiment:
+  - all legacy-company samples are used for training
+  - no validation split is used
+  - `zai_lab` plus `noah` are used only as the held-out test set
 - Paths are local by default and can be redirected in Colab by setting `PROJECT_ROOT`.

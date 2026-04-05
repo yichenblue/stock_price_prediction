@@ -7,13 +7,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
-    CrossMarketDataset,
     CrossMarketTransformerModel,
-    CrossMarketTransformerSharedHeadModel,
     HKTransformerOnlyModel,
     HKUSConcatBaseline,
     Trainer,
-    build_multi_company_dataset,
     build_multi_company_splits,
     discover_standardized_pairs,
     numpy_collate_fn,
@@ -28,8 +25,6 @@ from minimal_config import (
     US_LOOKBACK,
 )
 
-HELD_OUT_SHARED_HEAD_COMPANIES = {"zai_lab", "noah"}
-
 
 def _make_loader(dataset):
     return DataLoader(
@@ -41,38 +36,7 @@ def _make_loader(dataset):
     )
 
 
-def _with_shared_company_id(dataset: CrossMarketDataset) -> CrossMarketDataset:
-    return CrossMarketDataset(
-        x_hk=dataset.x_hk,
-        x_us=dataset.x_us,
-        hk_time_delta=dataset.hk_time_delta,
-        us_time_delta=dataset.us_time_delta,
-        company_id=torch.zeros_like(dataset.company_id),
-        us_open_prev_night=dataset.us_open_prev_night,
-        us_sessions_since_last_hk=dataset.us_sessions_since_last_hk,
-        latest_us_gap_days=dataset.latest_us_gap_days,
-        target=dataset.target,
-        hk_padding_mask=dataset.hk_padding_mask,
-        us_padding_mask=dataset.us_padding_mask,
-    )
-
-
-def split_company_specs(company_specs):
-    base_specs = [spec for spec in company_specs if spec["company_name"] not in HELD_OUT_SHARED_HEAD_COMPANIES]
-    held_out_specs = [spec for spec in company_specs if spec["company_name"] in HELD_OUT_SHARED_HEAD_COMPANIES]
-    base_specs = _reindex_company_specs(base_specs)
-    held_out_specs = _reindex_company_specs(held_out_specs)
-    return base_specs, held_out_specs
-
-
-def _reindex_company_specs(company_specs):
-    remapped = []
-    for new_id, spec in enumerate(company_specs):
-        remapped.append({**spec, "company_id": new_id})
-    return remapped
-
-
-def make_standard_dataloaders(company_specs):
+def make_dataloaders(company_specs):
     train_set, val_set, test_set = build_multi_company_splits(
         company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
@@ -92,37 +56,10 @@ def make_standard_dataloaders(company_specs):
     )
 
 
-def make_shared_head_dataloaders(base_specs, held_out_specs):
-    train_set = build_multi_company_dataset(
-        company_specs=base_specs,
-        hk_lookback=HK_LOOKBACK,
-        us_lookback=US_LOOKBACK,
-        task_type=MODEL_CONFIG.task_type,
-        target_col=TARGET_COL,
-        multiclass_num_classes=MODEL_CONFIG.num_classes,
-        use_us_prev_night=USE_US_PREV_NIGHT,
-    )
-    test_set = build_multi_company_dataset(
-        company_specs=held_out_specs,
-        hk_lookback=HK_LOOKBACK,
-        us_lookback=US_LOOKBACK,
-        task_type=MODEL_CONFIG.task_type,
-        target_col=TARGET_COL,
-        multiclass_num_classes=MODEL_CONFIG.num_classes,
-        use_us_prev_night=USE_US_PREV_NIGHT,
-    )
-    return (
-        _make_loader(_with_shared_company_id(train_set)),
-        None,
-        _make_loader(_with_shared_company_id(test_set)),
-    )
-
-
 def build_experiments():
     return [
         ("hk_us_concat", HKUSConcatBaseline),
         ("hk_transformer_only", HKTransformerOnlyModel),
-        ("cross_market_shared_head", CrossMarketTransformerSharedHeadModel),
         ("cross_market_transformer", CrossMarketTransformerModel),
     ]
 
@@ -130,26 +67,10 @@ def build_experiments():
 def main() -> None:
     torch.manual_seed(42)
     company_specs = discover_standardized_pairs(DATASET_ROOT)
-    base_specs, held_out_specs = split_company_specs(company_specs)
+    train_loader, val_loader, test_loader = make_dataloaders(company_specs)
 
-    if len(held_out_specs) != len(HELD_OUT_SHARED_HEAD_COMPANIES):
-        raise ValueError(
-            "Held-out shared-head companies were not found exactly as expected: "
-            f"{sorted(HELD_OUT_SHARED_HEAD_COMPANIES)}"
-        )
-
-    standard_train_loader, standard_val_loader, standard_test_loader = make_standard_dataloaders(base_specs)
-    shared_train_loader, shared_val_loader, shared_test_loader = make_shared_head_dataloaders(base_specs, held_out_specs)
-
-    print("Training/evaluation company pairs for standard models:")
-    for spec in base_specs:
-        print(
-            f"  [{spec['company_id']:02d}] {spec['company_name']}: "
-            f"HK={spec['hk_path']} | US={spec['us_path']}"
-        )
-    print()
-    print("Held-out companies used only for shared-head test:")
-    for spec in held_out_specs:
+    print("Loaded company pairs:")
+    for spec in company_specs:
         print(
             f"  [{spec['company_id']:02d}] {spec['company_name']}: "
             f"HK={spec['hk_path']} | US={spec['us_path']}"
@@ -161,16 +82,7 @@ def main() -> None:
         print("=" * 100)
         print(f"Running experiment: {exp_name}")
 
-        if exp_name == "cross_market_shared_head":
-            model_config = replace(deepcopy(MODEL_CONFIG), num_companies=1)
-            train_loader = shared_train_loader
-            val_loader = shared_val_loader
-            test_loader = shared_test_loader
-        else:
-            model_config = replace(deepcopy(MODEL_CONFIG), num_companies=len(base_specs))
-            train_loader = standard_train_loader
-            val_loader = standard_val_loader
-            test_loader = standard_test_loader
+        model_config = replace(deepcopy(MODEL_CONFIG), num_companies=len(company_specs))
         train_config = deepcopy(TRAIN_CONFIG)
         train_config.checkpoint_name = f"{exp_name}.pt"
         train_config.history_plot_name = f"{exp_name}_history.png"
