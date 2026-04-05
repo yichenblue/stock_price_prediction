@@ -61,9 +61,9 @@ Notes:
   - the most recent completed US session is excluded
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
-- `run_ablation.py` compares three settings with the same data split and trainer:
-  - `hk_only`
+- `run_ablation.py` compares four settings with the same data split and trainer:
   - `hk_us_concat`
   - `hk_transformer_only`
+  - `cross_market_shared_head`
   - `cross_market_transformer`
 - Paths are local by default and can be redirected in Colab by setting `PROJECT_ROOT`.

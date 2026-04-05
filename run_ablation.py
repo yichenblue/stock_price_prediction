@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
     CrossMarketTransformerModel,
-    HKOnlyBaseline,
+    CrossMarketTransformerSharedHeadModel,
     HKTransformerOnlyModel,
     HKUSConcatBaseline,
     Trainer,
@@ -56,9 +56,9 @@ def make_dataloaders():
 
 def build_experiments():
     return [
-        ("hk_only", HKOnlyBaseline),
         ("hk_us_concat", HKUSConcatBaseline),
         ("hk_transformer_only", HKTransformerOnlyModel),
+        ("cross_market_shared_head", CrossMarketTransformerSharedHeadModel),
         ("cross_market_transformer", CrossMarketTransformerModel),
     ]
 

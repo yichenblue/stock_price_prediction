@@ -269,6 +269,27 @@ class CompanySpecificHeads(nn.Module):
         return outputs
 
 
+class SharedHead(nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int,
+        output_dim: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.head = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, z: torch.Tensor) -> torch.Tensor:
+        # z: [batch, d_model]
+        return self.head(z)
+
+
 class CrossMarketTransformerModel(nn.Module):
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
@@ -349,6 +370,96 @@ class CrossMarketTransformerModel(nn.Module):
             hk_padding_mask=hk_padding_mask,
         )
         logits = self.company_specific_heads(z, company_id)
+        if self.config.task_type == "regression":
+            return logits.squeeze(-1)
+        return logits
+
+
+class CrossMarketTransformerSharedHeadModel(nn.Module):
+    """
+    Ablation model:
+    keep the full cross-market backbone, but replace company-specific
+    heads with one shared prediction head across all companies.
+    """
+
+    def __init__(self, config: ModelConfig) -> None:
+        super().__init__()
+        self.config = config
+        output_dim = _resolve_output_dim(config.task_type, config.num_classes)
+
+        self.hk_encoder = HKEncoder(
+            input_dim=config.hk_input_dim,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            num_layers=config.num_layers_hk,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            max_len=config.max_hk_len,
+            layer_norm_eps=config.layer_norm_eps,
+        )
+        self.us_encoder = USEncoder(
+            input_dim=config.us_input_dim,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            num_layers=config.num_layers_us,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            max_len=config.max_us_len,
+            layer_norm_eps=config.layer_norm_eps,
+        )
+        self.cross_market_fusion = CrossMarketFusion(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            layer_norm_eps=config.layer_norm_eps,
+            num_layers=config.num_fusion_layers,
+        )
+        self.pre_open_aggregator = PreOpenAggregator(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            num_companies=config.num_companies,
+            dropout=config.dropout,
+            layer_norm_eps=config.layer_norm_eps,
+        )
+        self.shared_head = SharedHead(
+            input_dim=config.d_model,
+            hidden_dim=config.head_hidden_dim,
+            output_dim=output_dim,
+            dropout=config.dropout,
+        )
+
+    def forward(
+        self,
+        x_hk: torch.Tensor,
+        x_us: torch.Tensor,
+        hk_time_delta: torch.Tensor,
+        us_time_delta: torch.Tensor,
+        company_id: torch.Tensor,
+        us_open_prev_night: torch.Tensor,
+        us_sessions_since_last_hk: torch.Tensor,
+        latest_us_gap_days: torch.Tensor,
+        hk_padding_mask: torch.Tensor | None = None,
+        us_padding_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        hk_encoded = self.hk_encoder(x_hk, time_delta=hk_time_delta, padding_mask=hk_padding_mask)
+        us_encoded = self.us_encoder(x_us, time_delta=us_time_delta, padding_mask=us_padding_mask)
+
+        fused_hk = self.cross_market_fusion(
+            hk_encoded=hk_encoded,
+            us_encoded=us_encoded,
+            hk_padding_mask=hk_padding_mask,
+            us_padding_mask=us_padding_mask,
+        )
+        z = self.pre_open_aggregator(
+            fused_hk=fused_hk,
+            company_id=company_id,
+            us_open_prev_night=us_open_prev_night,
+            us_sessions_since_last_hk=us_sessions_since_last_hk,
+            latest_us_gap_days=latest_us_gap_days,
+            hk_padding_mask=hk_padding_mask,
+        )
+        logits = self.shared_head(z)
         if self.config.task_type == "regression":
             return logits.squeeze(-1)
         return logits

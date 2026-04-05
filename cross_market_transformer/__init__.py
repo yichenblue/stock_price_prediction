@@ -14,11 +14,13 @@ from .data import (
 from .model import (
     CompanySpecificHeads,
     CrossMarketFusion,
+    CrossMarketTransformerSharedHeadModel,
     CrossMarketTransformerModel,
     HKEncoder,
     HKTransformerOnlyModel,
     PositionalEncoding,
     PreOpenAggregator,
+    SharedHead,
     USEncoder,
 )
 from .trainer import Trainer
@@ -27,6 +29,7 @@ __all__ = [
     "CompanySpecificHeads",
     "CrossMarketDataset",
     "CrossMarketFusion",
+    "CrossMarketTransformerSharedHeadModel",
     "CrossMarketTransformerModel",
     "HKOnlyBaseline",
     "HKEncoder",
@@ -36,6 +39,7 @@ __all__ = [
     "PositionalEncoding",
     "PreOpenAggregator",
     "SampleBatch",
+    "SharedHead",
     "Trainer",
     "TrainConfig",
     "USEncoder",
