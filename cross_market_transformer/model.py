@@ -261,11 +261,9 @@ class CompanySpecificHeads(nn.Module):
 
     def forward(self, z: torch.Tensor, company_id: torch.Tensor) -> torch.Tensor:
         # z: [batch, d_model]
-        outputs = z.new_zeros((z.size(0), self.output_dim))
-        for idx, head in enumerate(self.heads):
-            mask = company_id == idx
-            if mask.any():
-                outputs[mask] = head(z[mask])
+        all_outputs = torch.stack([head(z) for head in self.heads], dim=1)  # [batch, num_companies, output_dim]
+        gather_index = company_id.view(-1, 1, 1).expand(-1, 1, self.output_dim)
+        outputs = torch.gather(all_outputs, dim=1, index=gather_index).squeeze(1)
         return outputs
 
 
