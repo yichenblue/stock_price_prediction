@@ -66,4 +66,5 @@ Notes:
   - `hk_transformer_only`
   - `cross_market_shared_head`
   - `cross_market_transformer`
+- In the current ablation setup, `cross_market_shared_head` uses all legacy-company samples for training, no validation split, and uses `zai_lab` plus `noah` only as a held-out test set.
 - Paths are local by default and can be redirected in Colab by setting `PROJECT_ROOT`.

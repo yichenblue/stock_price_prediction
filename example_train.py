@@ -82,7 +82,7 @@ def main() -> None:
     fit_result = trainer.fit(train_loader, val_loader, test_loader=test_loader)
     test_metrics = trainer.evaluate(test_loader)
 
-    print("Best validation loss:", fit_result["best_val_loss"])
+    print(f"Best {fit_result['best_score_name']}:", fit_result["best_score"])
     print("Test metrics:", test_metrics)
     print("Number of company pairs:", len(company_specs))
 

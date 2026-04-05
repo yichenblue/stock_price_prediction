@@ -59,11 +59,14 @@ class Trainer:
     def fit(
         self,
         train_loader: DataLoader,
-        val_loader: DataLoader,
+        val_loader: DataLoader | None = None,
         test_loader: DataLoader | None = None,
     ) -> dict[str, Any]:
-        best_val_loss = float("inf")
-        history: dict[str, list[dict[str, float]]] = {"train": [], "val": []}
+        best_score = float("inf")
+        best_score_name = "val_loss" if val_loader is not None else "train_loss"
+        history: dict[str, list[dict[str, float]]] = {"train": []}
+        if val_loader is not None:
+            history["val"] = []
         if test_loader is not None:
             history["test"] = []
         checkpoint_path = self.train_config.checkpoint_path()
@@ -72,10 +75,11 @@ class Trainer:
         for epoch in range(1, self.train_config.num_epochs + 1):
             train_optimization_result = self._run_epoch(train_loader, training=True)
             train_result = self._run_epoch(train_loader, training=False)
-            val_result = self._run_epoch(val_loader, training=False)
+            val_result = self._run_epoch(val_loader, training=False) if val_loader is not None else None
             test_result = self._run_epoch(test_loader, training=False) if test_loader is not None else None
             history["train"].append({"loss": train_result.loss, **train_result.metrics})
-            history["val"].append({"loss": val_result.loss, **val_result.metrics})
+            if val_result is not None:
+                history["val"].append({"loss": val_result.loss, **val_result.metrics})
             if test_result is not None:
                 history["test"].append({"loss": test_result.loss, **test_result.metrics})
             self._log_epoch(
@@ -86,16 +90,18 @@ class Trainer:
                 test_result=test_result,
             )
 
-            self._step_scheduler(val_result.loss)
+            scheduler_score = val_result.loss if val_result is not None else train_result.loss
+            self._step_scheduler(scheduler_score)
 
-            if val_result.loss < best_val_loss:
-                best_val_loss = val_result.loss
-                self._save_checkpoint(checkpoint_path, epoch, best_val_loss)
+            current_score = val_result.loss if val_result is not None else train_result.loss
+            if current_score < best_score:
+                best_score = current_score
+                self._save_checkpoint(checkpoint_path, epoch, best_score)
 
         if self.train_config.plot_history:
             self._save_history_plot(history, self.train_config.history_plot_path())
         self.load_checkpoint(checkpoint_path)
-        return {"best_val_loss": best_val_loss, "history": history}
+        return {"best_score": best_score, "best_score_name": best_score_name, "history": history}
 
     def evaluate(self, data_loader: DataLoader) -> dict[str, float]:
         result = self._run_epoch(data_loader, training=False)
@@ -259,15 +265,18 @@ class Trainer:
         self,
         epoch: int,
         train_result: EpochResult,
-        val_result: EpochResult,
+        val_result: EpochResult | None,
         train_optimization_loss: float | None = None,
         test_result: EpochResult | None = None,
     ) -> None:
         train_metrics = self._format_metrics(train_result.metrics)
-        val_metrics = self._format_metrics(val_result.metrics)
         optimization_loss_str = ""
         if train_optimization_loss is not None:
             optimization_loss_str = f" train_optim_loss={train_optimization_loss:.6f} |"
+        val_str = ""
+        if val_result is not None:
+            val_metrics = self._format_metrics(val_result.metrics)
+            val_str = f" | val_loss={val_result.loss:.6f} | {val_metrics}"
         test_str = ""
         if test_result is not None:
             test_metrics = self._format_metrics(test_result.metrics)
@@ -275,7 +284,7 @@ class Trainer:
         print(
             f"Epoch {epoch:03d}/{self.train_config.num_epochs:03d} | "
             f"{optimization_loss_str} train_loss={train_result.loss:.6f} | {train_metrics} | "
-            f"val_loss={val_result.loss:.6f} | {val_metrics}{test_str}"
+            f"{val_str.lstrip()}{test_str}"
         )
 
     @staticmethod
@@ -293,7 +302,7 @@ class Trainer:
             return
 
         train_history = history["train"]
-        val_history = history["val"]
+        val_history = history.get("val")
         test_history = history.get("test")
         epochs = list(range(1, len(train_history) + 1))
 
@@ -306,9 +315,10 @@ class Trainer:
 
         for axis, metric_name in zip(axes, metric_names):
             train_values = [entry[metric_name] for entry in train_history]
-            val_values = [entry[metric_name] for entry in val_history]
             axis.plot(epochs, train_values, label="train", marker="o")
-            axis.plot(epochs, val_values, label="val", marker="o")
+            if val_history is not None:
+                val_values = [entry[metric_name] for entry in val_history]
+                axis.plot(epochs, val_values, label="val", marker="o")
             if test_history is not None:
                 test_values = [entry[metric_name] for entry in test_history]
                 axis.plot(epochs, test_values, label="test", marker="o")
