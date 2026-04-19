@@ -267,7 +267,7 @@ class Trainer:
                 target[:, 1].long(),
                 weight=class_weight,
             )
-            return r1_loss + peak_trough_loss
+            return 0.5 * r1_loss + peak_trough_loss
         if self.task_type == "binary_classification":
             return self.criterion(logits.float().view(-1), target.float().view(-1))
         return self.criterion(logits.float(), target.long().view(-1))
@@ -437,8 +437,11 @@ class Trainer:
                 "r1_ic",
                 "r1_sign_accuracy",
                 "r1_mse",
-                "accuracy",
+                "peak_precision",
+                "peak_recall",
                 "peak_f1",
+                "trough_precision",
+                "trough_recall",
                 "trough_f1",
             ):
                 if metric_name in history_entry:
