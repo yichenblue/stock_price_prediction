@@ -38,7 +38,7 @@ TRAIN_CONFIG = TrainConfig(
     checkpoint_dir=os.path.join(PROJECT_ROOT, "checkpoints"),
     checkpoint_name="cross_market_transformer.pt",
     scheduler_type="plateau",
-    class_weight=[8.0, 1.0, 8.0],
+    class_weight=[5.0, 1.0, 5.0],
     plot_history=True,
     history_plot_name="cross_market_training_history.png",
 )

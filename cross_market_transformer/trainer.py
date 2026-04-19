@@ -307,6 +307,24 @@ class Trainer:
                 num_classes=3,
                 class_names=("trough", "neutral", "peak"),
             )
+            peak_trough_probs = torch.softmax(peak_trough_logits, dim=-1)
+            threshold_metrics = {}
+            threshold_metrics.update(
+                _binary_event_metrics(
+                    scores=peak_trough_probs[:, 2],
+                    target=peak_trough_target == 2,
+                    threshold=0.5,
+                    prefix="peak_thr50",
+                )
+            )
+            threshold_metrics.update(
+                _binary_event_metrics(
+                    scores=peak_trough_probs[:, 0],
+                    target=peak_trough_target == 0,
+                    threshold=0.5,
+                    prefix="trough_thr50",
+                )
+            )
             return {
                 "r1_mse": r1_mse,
                 "r1_rmse": r1_rmse,
@@ -314,6 +332,7 @@ class Trainer:
                 "r1_ic": r1_ic,
                 "r1_sign_accuracy": r1_sign_accuracy,
                 **class_metrics,
+                **threshold_metrics,
             }
 
         if self.task_type == "binary_classification":
@@ -443,6 +462,12 @@ class Trainer:
                 "trough_precision",
                 "trough_recall",
                 "trough_f1",
+                "peak_thr50_precision",
+                "peak_thr50_recall",
+                "peak_thr50_f1",
+                "trough_thr50_precision",
+                "trough_thr50_recall",
+                "trough_thr50_f1",
             ):
                 if metric_name in history_entry:
                     names.append(metric_name)
@@ -493,6 +518,30 @@ def _classification_metrics(
     }
     metrics.update(per_class_metrics)
     return metrics
+
+
+def _binary_event_metrics(
+    scores: torch.Tensor,
+    target: torch.Tensor,
+    threshold: float,
+    prefix: str,
+) -> dict[str, float]:
+    preds = scores >= threshold
+    target = target.bool()
+    tp = (preds & target).sum().item()
+    fp = (preds & ~target).sum().item()
+    fn = (~preds & target).sum().item()
+
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) > 0 else 0.0
+    signal_rate = preds.float().mean().item()
+    return {
+        f"{prefix}_precision": precision,
+        f"{prefix}_recall": recall,
+        f"{prefix}_f1": f1,
+        f"{prefix}_signal_rate": signal_rate,
+    }
 
 
 def _information_coefficient(preds: torch.Tensor, target: torch.Tensor) -> float:
