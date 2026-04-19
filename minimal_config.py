@@ -11,13 +11,13 @@ TARGET_COL = "r1"
 USE_US_PREV_NIGHT = True
 
 MODEL_CONFIG = ModelConfig(
-    hk_input_dim=28,
-    us_input_dim=28,
+    hk_input_dim=29,
+    us_input_dim=29,
     num_companies=1,
     max_hk_len=HK_LOOKBACK,
     max_us_len=US_LOOKBACK,
-    task_type="regression",
-    num_classes=2,
+    task_type="regression_peak_trough",
+    num_classes=3,
     d_model=64,
     n_heads=4,
     num_layers_hk=2,

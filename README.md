@@ -48,7 +48,14 @@ Notes:
 - Padding masks are supported for future variable-length sequence handling.
 - The Excel loader supports your current files such as `09988_Factors_Standardized.xlsx` and `BABA_Factors_Standardized.xlsx`.
 - The trainer now prints one log line per epoch and saves a train-vs-val plot if `matplotlib` is installed.
-- The current default target is built from HK `r1`:
+- The current default task is `regression_peak_trough`:
+  - inputs exclude `target_peak` to avoid target leakage
+  - target is `[r1, target_peak]`
+  - model output is `[r1_pred, trough_logit, neutral_logit, peak_logit]`
+  - `softmax(output[:, 1:4])` gives `[trough_prob, neutral_prob, peak_prob]`
+  - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak
+- Other supported targets:
+  - `regression_peak_trough`: predict HK `r1` and peak/trough class jointly
   - `regression`: predict raw standardized `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
   - `binary_classification`: predict whether `r1 > 0`
   - `multiclass_classification`: discretize `r1` with configured thresholds

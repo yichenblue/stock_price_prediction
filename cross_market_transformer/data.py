@@ -15,6 +15,7 @@ from torch.utils.data import Dataset
 XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 XLSX_REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 OFFICE_DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+LABEL_COLUMNS = {"target_peak"}
 
 
 @dataclass
@@ -253,11 +254,22 @@ def build_samples_from_excel_pair(
     if target_col not in hk_feature_names:
         raise ValueError(f"target_col '{target_col}' not found in HK features.")
     target_idx = hk_feature_names.index(target_col)
+    target_peak_idx = None
+    if task_type == "regression_peak_trough":
+        if "target_peak" not in hk_feature_names:
+            raise ValueError("task_type='regression_peak_trough' requires a 'target_peak' column.")
+        target_peak_idx = hk_feature_names.index("target_peak")
+        if multiclass_num_classes != 3:
+            raise ValueError("regression_peak_trough requires multiclass_num_classes=3.")
+    input_indices = [idx for idx, name in enumerate(hk_feature_names) if name not in LABEL_COLUMNS]
+    input_feature_names = [hk_feature_names[idx] for idx in input_indices]
 
     hk_dates = hk_data["dates"]
-    hk_features = hk_data["features"]
+    hk_all_features = hk_data["features"]
+    hk_features = hk_all_features[:, input_indices]
     us_dates = us_data["dates"]
-    us_features = us_data["features"]
+    us_all_features = us_data["features"]
+    us_features = us_all_features[:, input_indices]
 
     x_hk_list = []
     x_us_list = []
@@ -284,7 +296,8 @@ def build_samples_from_excel_pair(
         hk_window_dates = hk_dates[hk_idx - hk_lookback : hk_idx]
         us_window = us_features[effective_us_latest_idx - us_lookback + 1 : effective_us_latest_idx + 1]
         us_window_dates = us_dates[effective_us_latest_idx - us_lookback + 1 : effective_us_latest_idx + 1]
-        target_value = float(hk_features[hk_idx, target_idx])
+        target_value = float(hk_all_features[hk_idx, target_idx])
+        target_peak_value = float(hk_all_features[hk_idx, target_peak_idx]) if target_peak_idx is not None else None
         last_hk_obs_date = hk_window_dates[-1]
         hk_time_delta = _compute_time_deltas(hk_date, hk_window_dates)
         us_time_delta = _compute_time_deltas(hk_date, us_window_dates)
@@ -307,6 +320,7 @@ def build_samples_from_excel_pair(
         targets.append(
             _build_target(
                 target_value=target_value,
+                target_peak_value=target_peak_value,
                 task_type=task_type,
                 multiclass_num_classes=multiclass_num_classes,
                 multiclass_thresholds=multiclass_thresholds,
@@ -317,7 +331,7 @@ def build_samples_from_excel_pair(
     if not x_hk_list:
         raise ValueError("No valid aligned samples were created. Check lookback lengths and date overlap.")
 
-    target_dtype = np.float32 if task_type in {"regression", "binary_classification"} else np.int64
+    target_dtype = np.float32 if task_type in {"regression", "binary_classification", "regression_peak_trough"} else np.int64
     return {
         "x_hk": np.asarray(x_hk_list, dtype=np.float32),
         "x_us": np.asarray(x_us_list, dtype=np.float32),
@@ -329,7 +343,7 @@ def build_samples_from_excel_pair(
         "latest_us_gap_days": np.asarray(latest_us_gap_days_list, dtype=np.float32),
         "target": np.asarray(targets, dtype=target_dtype),
         "sample_dates": np.asarray(sample_dates, dtype="datetime64[D]"),
-        "feature_names": hk_feature_names,
+        "feature_names": input_feature_names,
     }
 
 
@@ -500,12 +514,17 @@ def _concat_dataset_parts(parts: Sequence[dict[str, np.ndarray]]) -> CrossMarket
 
 def _build_target(
     target_value: float,
+    target_peak_value: float | None,
     task_type: str,
     multiclass_num_classes: int,
     multiclass_thresholds: Sequence[float] | None,
 ):
     if task_type == "regression":
         return target_value
+    if task_type == "regression_peak_trough":
+        if target_peak_value is None:
+            raise ValueError("target_peak_value is required for regression_peak_trough.")
+        return np.asarray([target_value, target_peak_value], dtype=np.float32)
     if task_type == "binary_classification":
         return 1.0 if target_value > 0.0 else 0.0
     if task_type == "multiclass_classification":

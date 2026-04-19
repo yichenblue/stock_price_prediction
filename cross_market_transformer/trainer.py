@@ -148,6 +148,19 @@ class Trainer:
                 outputs.append(logits.detach().cpu())
         return torch.cat(outputs, dim=0)
 
+    def predict_peak_trough_probabilities(self, data_loader: DataLoader) -> dict[str, torch.Tensor]:
+        raw = self.predict(data_loader)
+        if self.task_type != "regression_peak_trough":
+            raise ValueError("predict_peak_trough_probabilities requires task_type='regression_peak_trough'.")
+        probs = torch.softmax(raw[:, 1:4], dim=-1)
+        return {
+            "r1_pred": raw[:, 0],
+            "trough_prob": probs[:, 0],
+            "neutral_prob": probs[:, 1],
+            "peak_prob": probs[:, 2],
+            "peak_trough_probs": probs,
+        }
+
     def load_checkpoint(self, path: str | Path) -> None:
         state = torch.load(path, map_location=self.device)
         self.model.load_state_dict(state["model_state_dict"])
@@ -199,6 +212,8 @@ class Trainer:
     def _build_loss(self) -> nn.Module:
         if self.task_type == "regression":
             return nn.MSELoss()
+        if self.task_type == "regression_peak_trough":
+            return nn.MSELoss()
         if self.task_type == "binary_classification":
             pos_weight = None
             if self.train_config.class_weight is not None:
@@ -240,6 +255,19 @@ class Trainer:
     def _compute_loss(self, logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         if self.task_type == "regression":
             return self.criterion(logits.float(), target.float().view_as(logits))
+        if self.task_type == "regression_peak_trough":
+            r1_loss = self.criterion(logits[:, 0].float(), target[:, 0].float())
+            class_weight = None
+            if self.train_config.class_weight is not None:
+                if len(self.train_config.class_weight) != 3:
+                    raise ValueError("regression_peak_trough class_weight must contain exactly three values.")
+                class_weight = torch.tensor(self.train_config.class_weight, dtype=torch.float32, device=self.device)
+            peak_trough_loss = nn.functional.cross_entropy(
+                logits[:, 1:4].float(),
+                target[:, 1].long(),
+                weight=class_weight,
+            )
+            return r1_loss + peak_trough_loss
         if self.task_type == "binary_classification":
             return self.criterion(logits.float().view(-1), target.float().view(-1))
         return self.criterion(logits.float(), target.long().view(-1))
@@ -259,6 +287,33 @@ class Trainer:
                 "mae": mae,
                 "ic": ic,
                 "sign_accuracy": sign_accuracy,
+            }
+
+        if self.task_type == "regression_peak_trough":
+            r1_preds = preds[:, 0].float()
+            r1_target = target[:, 0].float()
+            r1_mse = torch.mean((r1_preds - r1_target) ** 2).item()
+            r1_mae = torch.mean(torch.abs(r1_preds - r1_target)).item()
+            r1_rmse = r1_mse ** 0.5
+            r1_ic = _information_coefficient(r1_preds, r1_target)
+            r1_sign_accuracy = ((r1_preds >= 0) == (r1_target >= 0)).float().mean().item()
+
+            peak_trough_logits = preds[:, 1:4].float()
+            peak_trough_labels = torch.argmax(peak_trough_logits, dim=-1)
+            peak_trough_target = target[:, 1].long()
+            class_metrics = _classification_metrics(
+                peak_trough_labels,
+                peak_trough_target,
+                num_classes=3,
+                class_names=("trough", "neutral", "peak"),
+            )
+            return {
+                "r1_mse": r1_mse,
+                "r1_rmse": r1_rmse,
+                "r1_mae": r1_mae,
+                "r1_ic": r1_ic,
+                "r1_sign_accuracy": r1_sign_accuracy,
+                **class_metrics,
             }
 
         if self.task_type == "binary_classification":
@@ -376,6 +431,19 @@ class Trainer:
                 if metric_name in history_entry:
                     names.append(metric_name)
             return names
+        if self.task_type == "regression_peak_trough":
+            names = []
+            for metric_name in (
+                "r1_ic",
+                "r1_sign_accuracy",
+                "r1_mse",
+                "accuracy",
+                "peak_f1",
+                "trough_f1",
+            ):
+                if metric_name in history_entry:
+                    names.append(metric_name)
+            return names
 
         names = ["loss"]
         for metric_name in ("accuracy", "f1_macro", "precision_macro", "recall_macro"):
@@ -388,11 +456,13 @@ def _classification_metrics(
     preds: torch.Tensor,
     target: torch.Tensor,
     num_classes: int,
+    class_names: tuple[str, ...] | None = None,
 ) -> dict[str, float]:
     accuracy = (preds == target).float().mean().item()
     precision_scores = []
     recall_scores = []
     f1_scores = []
+    per_class_metrics = {}
 
     for cls in range(num_classes):
         tp = ((preds == cls) & (target == cls)).sum().item()
@@ -406,13 +476,20 @@ def _classification_metrics(
         precision_scores.append(precision)
         recall_scores.append(recall)
         f1_scores.append(f1)
+        if class_names is not None:
+            class_name = class_names[cls]
+            per_class_metrics[f"{class_name}_precision"] = precision
+            per_class_metrics[f"{class_name}_recall"] = recall
+            per_class_metrics[f"{class_name}_f1"] = f1
 
-    return {
+    metrics = {
         "accuracy": accuracy,
         "precision_macro": sum(precision_scores) / num_classes,
         "recall_macro": sum(recall_scores) / num_classes,
         "f1_macro": sum(f1_scores) / num_classes,
     }
+    metrics.update(per_class_metrics)
+    return metrics
 
 
 def _information_coefficient(preds: torch.Tensor, target: torch.Tensor) -> float:

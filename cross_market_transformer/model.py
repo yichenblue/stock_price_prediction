@@ -532,6 +532,10 @@ class HKTransformerOnlyModel(nn.Module):
 def _resolve_output_dim(task_type: str, num_classes: int) -> int:
     if task_type == "regression":
         return 1
+    if task_type == "regression_peak_trough":
+        if num_classes != 3:
+            raise ValueError("regression_peak_trough requires num_classes=3.")
+        return 1 + num_classes
     if task_type == "binary_classification":
         return 1
     if task_type == "multiclass_classification":
