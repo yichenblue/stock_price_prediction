@@ -48,6 +48,8 @@ class TrainConfig:
     threshold_sweep_name: str = "threshold_sweep.csv"
     threshold_sweep_values: list[float] = field(default_factory=lambda: [0.5, 0.6, 0.7, 0.8, 0.9])
     threshold_sweep_plot_name: str = "threshold_sweep.png"
+    history_plot_metrics: Optional[list[str]] = None
+    threshold_sweep_plot_metrics: Optional[list[str]] = None
 
     def checkpoint_path(self) -> Path:
         return Path(self.checkpoint_dir) / self.checkpoint_name

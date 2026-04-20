@@ -522,7 +522,7 @@ class Trainer:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         events = ("peak", "trough")
-        metrics = ("precision", "recall", "f1", "signal_rate")
+        metrics = tuple(self.train_config.threshold_sweep_plot_metrics or ("f1", "signal_rate"))
         splits = []
         for row in rows:
             split = str(row["split"])
@@ -568,6 +568,10 @@ class Trainer:
         return metric_keys[0]
 
     def _plot_metric_names(self, history_entry: dict[str, float]) -> list[str]:
+        configured_names = self.train_config.history_plot_metrics
+        if configured_names is not None:
+            return [metric_name for metric_name in configured_names if metric_name in history_entry]
+
         if self.task_type == "regression":
             names = []
             for metric_name in ("ic", "sign_accuracy", "mse", "mae"):
@@ -580,18 +584,9 @@ class Trainer:
                 "r1_ic",
                 "r1_sign_accuracy",
                 "r1_mse",
-                "peak_precision",
-                "peak_recall",
                 "peak_f1",
-                "trough_precision",
-                "trough_recall",
                 "trough_f1",
-                "peak_thr50_precision",
-                "peak_thr50_recall",
-                "peak_thr50_f1",
-                "trough_thr50_precision",
-                "trough_thr50_recall",
-                "trough_thr50_f1",
+                "loss",
             ):
                 if metric_name in history_entry:
                     names.append(metric_name)
