@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -121,6 +122,17 @@ class Trainer:
         if self.train_config.plot_history:
             self._save_history_plot(history, self.train_config.history_plot_path())
         self.load_checkpoint(checkpoint_path)
+        if self.train_config.save_threshold_sweep and self.task_type == "regression_peak_trough":
+            sweep_loaders = {"train": train_loader}
+            if val_loader is not None:
+                sweep_loaders["val"] = val_loader
+            if test_loader is not None:
+                sweep_loaders["test"] = test_loader
+            self.save_threshold_sweep(
+                sweep_loaders,
+                self.train_config.threshold_sweep_path(),
+                plot_path=self.train_config.threshold_sweep_plot_path(),
+            )
         return {"best_score": best_score, "best_score_name": best_score_name, "history": history}
 
     def evaluate(self, data_loader: DataLoader) -> dict[str, float]:
@@ -161,9 +173,77 @@ class Trainer:
             "peak_trough_probs": probs,
         }
 
+    def save_threshold_sweep(
+        self,
+        data_loaders: dict[str, DataLoader],
+        path: str | Path,
+        plot_path: str | Path | None = None,
+    ) -> None:
+        if self.task_type != "regression_peak_trough":
+            raise ValueError("save_threshold_sweep requires task_type='regression_peak_trough'.")
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = []
+        for split_name, data_loader in data_loaders.items():
+            raw_preds, targets = self._collect_predictions_and_targets(data_loader)
+            probs = torch.softmax(raw_preds[:, 1:4], dim=-1)
+            labels = targets[:, 1].long()
+            for threshold in self.train_config.threshold_sweep_values:
+                rows.append(
+                    _threshold_sweep_row(
+                        split=split_name,
+                        event="peak",
+                        threshold=threshold,
+                        scores=probs[:, 2],
+                        target=labels == 2,
+                    )
+                )
+                rows.append(
+                    _threshold_sweep_row(
+                        split=split_name,
+                        event="trough",
+                        threshold=threshold,
+                        scores=probs[:, 0],
+                        target=labels == 0,
+                    )
+                )
+
+        fieldnames = ["split", "event", "threshold", "precision", "recall", "f1", "signal_rate"]
+        with path.open("w", newline="") as file:
+            writer = csv.DictWriter(file, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        print(f"Saved threshold sweep to {path}")
+        if plot_path is not None:
+            self._save_threshold_sweep_plot(rows, Path(plot_path))
+
     def load_checkpoint(self, path: str | Path) -> None:
         state = torch.load(path, map_location=self.device)
         self.model.load_state_dict(state["model_state_dict"])
+
+    def _collect_predictions_and_targets(self, data_loader: DataLoader) -> tuple[torch.Tensor, torch.Tensor]:
+        self.model.eval()
+        predictions = []
+        targets = []
+        with torch.no_grad():
+            for batch in data_loader:
+                batch = batch.to(self.device)
+                logits = self.model(
+                    x_hk=batch.x_hk,
+                    x_us=batch.x_us,
+                    hk_time_delta=batch.hk_time_delta,
+                    us_time_delta=batch.us_time_delta,
+                    company_id=batch.company_id,
+                    us_open_prev_night=batch.us_open_prev_night,
+                    us_sessions_since_last_hk=batch.us_sessions_since_last_hk,
+                    latest_us_gap_days=batch.latest_us_gap_days,
+                    hk_padding_mask=batch.hk_padding_mask,
+                    us_padding_mask=batch.us_padding_mask,
+                )
+                predictions.append(logits.detach().cpu())
+                targets.append(batch.target.detach().cpu())
+        return torch.cat(predictions, dim=0), torch.cat(targets, dim=0)
 
     def _run_epoch(self, data_loader: DataLoader, training: bool) -> EpochResult:
         self.model.train(training)
@@ -430,6 +510,50 @@ class Trainer:
         plt.close(fig)
         print(f"Saved training history plot to {path}")
 
+    def _save_threshold_sweep_plot(self, rows: list[dict[str, float | str]], path: Path) -> None:
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print(
+                "Skipping threshold sweep plot because matplotlib is not installed. "
+                f"Install it to save {path}."
+            )
+            return
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        events = ("peak", "trough")
+        metrics = ("precision", "recall", "f1", "signal_rate")
+        splits = []
+        for row in rows:
+            split = str(row["split"])
+            if split not in splits:
+                splits.append(split)
+
+        fig, axes = plt.subplots(len(events), len(metrics), figsize=(5 * len(metrics), 4 * len(events)), squeeze=False)
+        for row_idx, event in enumerate(events):
+            for col_idx, metric in enumerate(metrics):
+                axis = axes[row_idx][col_idx]
+                for split in splits:
+                    points = [
+                        row
+                        for row in rows
+                        if row["event"] == event and row["split"] == split
+                    ]
+                    points = sorted(points, key=lambda row: float(row["threshold"]))
+                    thresholds = [float(row["threshold"]) for row in points]
+                    values = [float(row[metric]) for row in points]
+                    axis.plot(thresholds, values, marker="o", label=split)
+                axis.set_title(f"{event}_{metric}")
+                axis.set_xlabel("threshold")
+                axis.set_ylabel(metric)
+                axis.grid(True, alpha=0.3)
+                axis.legend()
+
+        fig.tight_layout()
+        fig.savefig(path, dpi=160, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved threshold sweep plot to {path}")
+
     def _primary_metric_name(self, history_entry: dict[str, float]) -> str | None:
         metric_keys = [key for key in history_entry.keys() if key != "loss"]
         if not metric_keys:
@@ -541,6 +665,30 @@ def _binary_event_metrics(
         f"{prefix}_recall": recall,
         f"{prefix}_f1": f1,
         f"{prefix}_signal_rate": signal_rate,
+    }
+
+
+def _threshold_sweep_row(
+    split: str,
+    event: str,
+    threshold: float,
+    scores: torch.Tensor,
+    target: torch.Tensor,
+) -> dict[str, float | str]:
+    metrics = _binary_event_metrics(
+        scores=scores,
+        target=target,
+        threshold=threshold,
+        prefix="event",
+    )
+    return {
+        "split": split,
+        "event": event,
+        "threshold": threshold,
+        "precision": metrics["event_precision"],
+        "recall": metrics["event_recall"],
+        "f1": metrics["event_f1"],
+        "signal_rate": metrics["event_signal_rate"],
     }
 
 

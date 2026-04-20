@@ -86,6 +86,8 @@ def main() -> None:
         train_config = deepcopy(TRAIN_CONFIG)
         train_config.checkpoint_name = f"{exp_name}.pt"
         train_config.history_plot_name = f"{exp_name}_history.png"
+        train_config.threshold_sweep_name = f"{exp_name}_threshold_sweep.csv"
+        train_config.threshold_sweep_plot_name = f"{exp_name}_threshold_sweep.png"
 
         model = model_cls(model_config)
         trainer = Trainer(

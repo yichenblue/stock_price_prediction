@@ -123,6 +123,8 @@ def main() -> None:
     train_config = deepcopy(TRAIN_CONFIG)
     train_config.checkpoint_name = "cross_market_shared_head.pt"
     train_config.history_plot_name = "cross_market_shared_head_history.png"
+    train_config.threshold_sweep_name = "cross_market_shared_head_threshold_sweep.csv"
+    train_config.threshold_sweep_plot_name = "cross_market_shared_head_threshold_sweep.png"
 
     model = CrossMarketTransformerSharedHeadModel(model_config)
     trainer = Trainer(
