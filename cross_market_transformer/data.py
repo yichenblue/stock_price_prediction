@@ -281,6 +281,8 @@ def build_samples_from_excel_pair(
     us_dates = us_data["dates"]
     us_all_features = us_data["features"]
     us_features = us_all_features[:, input_indices]
+    hk_rolling_prefix = _rolling_stat_prefixes(hk_features) if normalization_mode == "rolling" else None
+    us_rolling_prefix = _rolling_stat_prefixes(us_features) if normalization_mode == "rolling" else None
 
     x_hk_list = []
     x_us_list = []
@@ -310,13 +312,13 @@ def build_samples_from_excel_pair(
         if normalization_mode == "rolling":
             hk_window = _rolling_normalize_window(
                 window=hk_window,
-                history=hk_features,
+                prefixes=hk_rolling_prefix,
                 history_end=hk_idx,
                 rolling_window=rolling_normalization_window,
             )
             us_window = _rolling_normalize_window(
                 window=us_window,
-                history=us_features,
+                prefixes=us_rolling_prefix,
                 history_end=effective_us_latest_idx + 1,
                 rolling_window=rolling_normalization_window,
             )
@@ -604,18 +606,44 @@ def _validate_normalization_mode(normalization_mode: str) -> None:
 
 def _rolling_normalize_window(
     window: np.ndarray,
-    history: np.ndarray,
+    prefixes: tuple[np.ndarray, np.ndarray] | None,
     history_end: int,
     rolling_window: int | None,
 ) -> np.ndarray:
+    if prefixes is None:
+        raise ValueError("Rolling normalization requires precomputed rolling statistic prefixes.")
     if rolling_window is not None and rolling_window <= 0:
         raise ValueError("rolling_normalization_window must be positive or None.")
     history_start = 0 if rolling_window is None else max(0, history_end - rolling_window)
-    history_values = history[history_start:history_end]
-    if len(history_values) == 0:
+    history_count = history_end - history_start
+    if history_count <= 0:
         raise ValueError("Rolling normalization requires at least one historical row.")
-    mean, std = _mean_std(history_values)
+    mean, std = _mean_std_from_prefixes(prefixes, history_start, history_end)
     return ((window - mean) / std).astype(np.float32)
+
+
+def _rolling_stat_prefixes(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    values64 = values.astype(np.float64)
+    zeros = np.zeros((1, values.shape[1]), dtype=np.float64)
+    prefix_sum = np.concatenate([zeros, np.cumsum(values64, axis=0)], axis=0)
+    prefix_square_sum = np.concatenate([zeros, np.cumsum(values64 * values64, axis=0)], axis=0)
+    return prefix_sum, prefix_square_sum
+
+
+def _mean_std_from_prefixes(
+    prefixes: tuple[np.ndarray, np.ndarray],
+    start: int,
+    end: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    prefix_sum, prefix_square_sum = prefixes
+    count = float(end - start)
+    total = prefix_sum[end] - prefix_sum[start]
+    square_total = prefix_square_sum[end] - prefix_square_sum[start]
+    mean = total / count
+    variance = np.maximum(square_total / count - mean * mean, 0.0)
+    std = np.sqrt(variance)
+    std = np.where(std < 1e-6, 1.0, std)
+    return mean.astype(np.float32), std.astype(np.float32)
 
 
 def _fit_feature_normalizer(parts: Sequence[dict[str, np.ndarray]]) -> FeatureNormalizer:

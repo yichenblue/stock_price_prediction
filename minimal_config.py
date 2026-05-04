@@ -26,15 +26,15 @@ MODEL_CONFIG = ModelConfig(
     num_layers_us=2,
     num_fusion_layers=1,
     head_hidden_dim=64,
-    dropout=0.25,
+    dropout=0.3,
 )
 
 
 TRAIN_CONFIG = TrainConfig(
     batch_size=64,
-    num_epochs=120,
-    learning_rate=2e-4,
-    weight_decay=1e-4,
+    num_epochs=60,
+    learning_rate=1e-4,
+    weight_decay=3e-4,
     grad_clip_norm=1.0,
     early_stopping_patience=5,
     checkpoint_dir=os.path.join(PROJECT_ROOT, "checkpoints"),
