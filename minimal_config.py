@@ -32,9 +32,9 @@ MODEL_CONFIG = ModelConfig(
 
 TRAIN_CONFIG = TrainConfig(
     batch_size=64,
-    num_epochs=60,
+    num_epochs=45,
     learning_rate=1e-4,
-    weight_decay=3e-4,
+    weight_decay=5e-4,
     grad_clip_norm=1.0,
     early_stopping_patience=5,
     checkpoint_dir=os.path.join(PROJECT_ROOT, "checkpoints"),
