@@ -12,13 +12,15 @@ from cross_market_transformer import (
     HKUSConcatBaseline,
     Trainer,
     build_multi_company_splits,
-    discover_standardized_pairs,
+    discover_cleaned_pairs,
     numpy_collate_fn,
 )
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
+    NORMALIZATION_MODE,
+    ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
@@ -48,6 +50,8 @@ def make_dataloaders(company_specs):
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
     )
     return (
         _make_loader(train_set),
@@ -66,10 +70,10 @@ def build_experiments():
 
 def main() -> None:
     torch.manual_seed(42)
-    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    company_specs = discover_cleaned_pairs(DATASET_ROOT)
     train_loader, val_loader, test_loader = make_dataloaders(company_specs)
 
-    print("Loaded company pairs:")
+    print("Loaded leak-free cleaned company pairs:")
     for spec in company_specs:
         print(
             f"  [{spec['company_id']:02d}] {spec['company_name']}: "

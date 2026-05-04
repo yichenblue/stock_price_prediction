@@ -11,13 +11,15 @@ from cross_market_transformer import (
     CrossMarketTransformerSharedHeadModel,
     Trainer,
     build_multi_company_dataset,
-    discover_standardized_pairs,
+    discover_cleaned_pairs,
     numpy_collate_fn,
 )
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
+    NORMALIZATION_MODE,
+    ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
@@ -75,6 +77,8 @@ def make_dataloaders(base_specs, held_out_specs):
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
     )
     test_set = build_multi_company_dataset(
         company_specs=held_out_specs,
@@ -84,6 +88,8 @@ def make_dataloaders(base_specs, held_out_specs):
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
     )
     return (
         _make_loader(_with_shared_company_id(train_set)),
@@ -93,7 +99,7 @@ def make_dataloaders(base_specs, held_out_specs):
 
 def main() -> None:
     torch.manual_seed(42)
-    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    company_specs = discover_cleaned_pairs(DATASET_ROOT)
     base_specs, held_out_specs = split_company_specs(company_specs)
 
     if len(held_out_specs) != len(HELD_OUT_SHARED_HEAD_COMPANIES):
@@ -104,14 +110,14 @@ def main() -> None:
 
     train_loader, test_loader = make_dataloaders(base_specs, held_out_specs)
 
-    print("Training companies for shared-head model:")
+    print("Training companies for shared-head model using cleaned inputs:")
     for spec in base_specs:
         print(
             f"  [{spec['company_id']:02d}] {spec['company_name']}: "
             f"HK={spec['hk_path']} | US={spec['us_path']}"
         )
     print()
-    print("Held-out test companies for shared-head model:")
+    print("Held-out test companies for shared-head model using cleaned inputs:")
     for spec in held_out_specs:
         print(
             f"  [{spec['company_id']:02d}] {spec['company_name']}: "

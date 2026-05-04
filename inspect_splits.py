@@ -1,15 +1,14 @@
 from __future__ import annotations
 
-import math
-from dataclasses import replace
-
 import numpy as np
 
-from cross_market_transformer import build_multi_company_splits, discover_standardized_pairs
+from cross_market_transformer import build_multi_company_splits, discover_cleaned_pairs
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
+    NORMALIZATION_MODE,
+    ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
@@ -52,7 +51,7 @@ def summarize_split(name: str, values: np.ndarray) -> None:
 
 
 def main() -> None:
-    company_specs = discover_standardized_pairs(DATASET_ROOT)
+    company_specs = discover_cleaned_pairs(DATASET_ROOT)
     train_set, val_set, test_set = build_multi_company_splits(
         company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
@@ -64,6 +63,8 @@ def main() -> None:
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
     )
     train_targets = train_set.target.numpy().astype(np.float64)
     val_targets = val_set.target.numpy().astype(np.float64)

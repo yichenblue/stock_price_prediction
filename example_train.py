@@ -9,13 +9,15 @@ from cross_market_transformer import (
     CrossMarketTransformerModel,
     Trainer,
     build_multi_company_splits,
-    discover_standardized_pairs,
+    discover_cleaned_pairs,
     numpy_collate_fn,
 )
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
     MODEL_CONFIG,
+    NORMALIZATION_MODE,
+    ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
@@ -24,8 +26,8 @@ from minimal_config import (
 
 
 def main() -> None:
-    company_specs = discover_standardized_pairs(DATASET_ROOT)
-    print("Loaded company pairs:")
+    company_specs = discover_cleaned_pairs(DATASET_ROOT)
+    print("Loaded leak-free cleaned company pairs:")
     for spec in company_specs:
         print(
             f"  [{spec['company_id']:02d}] {spec['company_name']}: "
@@ -47,6 +49,8 @@ def main() -> None:
         target_col=TARGET_COL,
         multiclass_num_classes=model_config.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
     )
 
     train_loader = DataLoader(

@@ -48,6 +48,14 @@ class SampleBatch:
         )
 
 
+@dataclass(frozen=True)
+class FeatureNormalizer:
+    hk_mean: np.ndarray
+    hk_std: np.ndarray
+    us_mean: np.ndarray
+    us_std: np.ndarray
+
+
 class CrossMarketDataset(Dataset):
     """Dataset for chronologically aligned cross-market samples."""
 
@@ -184,7 +192,7 @@ def load_factor_xlsx(
     date_col: str = "Date",
 ) -> dict[str, np.ndarray | list[str]]:
     """
-    Read the standardized factor Excel file without pandas/openpyxl.
+    Read a factor Excel file without pandas/openpyxl.
 
     Returns:
         {
@@ -231,6 +239,8 @@ def build_samples_from_excel_pair(
     multiclass_num_classes: int = 3,
     multiclass_thresholds: Sequence[float] | None = None,
     use_us_prev_night: bool = True,
+    normalization_mode: str = "rolling",
+    rolling_normalization_window: int | None = 252,
 ) -> dict[str, np.ndarray]:
     """
     Build aligned samples for one HK/US listed company pair.
@@ -243,6 +253,7 @@ def build_samples_from_excel_pair(
       x_us ends at the US row immediately before the latest completed US row
     - target uses the HK row at date t
     """
+    _validate_normalization_mode(normalization_mode)
     hk_data = load_factor_xlsx(hk_path)
     us_data = load_factor_xlsx(us_path)
 
@@ -296,6 +307,19 @@ def build_samples_from_excel_pair(
         hk_window_dates = hk_dates[hk_idx - hk_lookback : hk_idx]
         us_window = us_features[effective_us_latest_idx - us_lookback + 1 : effective_us_latest_idx + 1]
         us_window_dates = us_dates[effective_us_latest_idx - us_lookback + 1 : effective_us_latest_idx + 1]
+        if normalization_mode == "rolling":
+            hk_window = _rolling_normalize_window(
+                window=hk_window,
+                history=hk_features,
+                history_end=hk_idx,
+                rolling_window=rolling_normalization_window,
+            )
+            us_window = _rolling_normalize_window(
+                window=us_window,
+                history=us_features,
+                history_end=effective_us_latest_idx + 1,
+                rolling_window=rolling_normalization_window,
+            )
         target_value = float(hk_all_features[hk_idx, target_idx])
         target_peak_value = float(hk_all_features[hk_idx, target_peak_idx]) if target_peak_idx is not None else None
         last_hk_obs_date = hk_window_dates[-1]
@@ -356,7 +380,12 @@ def build_multi_company_dataset(
     multiclass_num_classes: int = 3,
     multiclass_thresholds: Sequence[float] | None = None,
     use_us_prev_night: bool = True,
-) -> CrossMarketDataset:
+    normalizer: FeatureNormalizer | None = None,
+    fit_normalizer: bool = False,
+    return_normalizer: bool = False,
+    normalization_mode: str = "rolling",
+    rolling_normalization_window: int | None = 252,
+) -> CrossMarketDataset | tuple[CrossMarketDataset, FeatureNormalizer | None]:
     x_hk_parts = []
     x_us_parts = []
     company_parts = []
@@ -367,19 +396,29 @@ def build_multi_company_dataset(
     hk_time_delta_parts = []
     us_time_delta_parts = []
 
-    for spec in company_specs:
-        samples = build_samples_from_excel_pair(
-            hk_path=spec["hk_path"],
-            us_path=spec["us_path"],
-            hk_lookback=hk_lookback,
-            us_lookback=us_lookback,
-            company_id=spec["company_id"],
-            task_type=task_type,
-            target_col=target_col,
-            multiclass_num_classes=multiclass_num_classes,
-            multiclass_thresholds=multiclass_thresholds,
-            use_us_prev_night=use_us_prev_night,
-        )
+    _validate_normalization_mode(normalization_mode)
+    if normalizer is not None and fit_normalizer:
+        raise ValueError("Provide either normalizer or fit_normalizer=True, not both.")
+    if normalization_mode != "train" and (normalizer is not None or fit_normalizer):
+        raise ValueError("normalizer and fit_normalizer are only valid when normalization_mode='train'.")
+
+    parts = _build_multi_company_parts(
+        company_specs=company_specs,
+        hk_lookback=hk_lookback,
+        us_lookback=us_lookback,
+        task_type=task_type,
+        target_col=target_col,
+        multiclass_num_classes=multiclass_num_classes,
+        multiclass_thresholds=multiclass_thresholds,
+        use_us_prev_night=use_us_prev_night,
+        normalization_mode=normalization_mode,
+        rolling_normalization_window=rolling_normalization_window,
+    )
+    fitted_normalizer = _fit_feature_normalizer(parts) if fit_normalizer else normalizer
+    if fitted_normalizer is not None:
+        parts = [_apply_feature_normalizer(part, fitted_normalizer) for part in parts]
+
+    for samples in parts:
         x_hk_parts.append(samples["x_hk"])
         x_us_parts.append(samples["x_us"])
         hk_time_delta_parts.append(samples["hk_time_delta"])
@@ -400,7 +439,7 @@ def build_multi_company_dataset(
     latest_us_gap_days = np.concatenate(latest_us_gap_parts, axis=0)
     target = np.concatenate(target_parts, axis=0)
 
-    return CrossMarketDataset(
+    dataset = CrossMarketDataset(
         x_hk=x_hk,
         x_us=x_us,
         hk_time_delta=hk_time_delta,
@@ -411,6 +450,9 @@ def build_multi_company_dataset(
         latest_us_gap_days=latest_us_gap_days,
         target=target,
     )
+    if return_normalizer:
+        return dataset, fitted_normalizer
+    return dataset
 
 
 def build_multi_company_splits(
@@ -425,9 +467,15 @@ def build_multi_company_splits(
     multiclass_num_classes: int = 3,
     multiclass_thresholds: Sequence[float] | None = None,
     use_us_prev_night: bool = True,
+    normalization_mode: str = "rolling",
+    rolling_normalization_window: int | None = 252,
+    normalize_features: bool | None = None,
 ) -> tuple[CrossMarketDataset, CrossMarketDataset, CrossMarketDataset]:
     if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0):
         raise ValueError("Split ratios must sum to 1.0.")
+    if normalize_features is not None:
+        normalization_mode = "train" if normalize_features else "none"
+    _validate_normalization_mode(normalization_mode)
 
     split_parts: dict[str, list[dict[str, np.ndarray]]] = {"train": [], "val": [], "test": []}
     array_keys = (
@@ -442,19 +490,18 @@ def build_multi_company_splits(
         "target",
     )
 
-    for spec in company_specs:
-        samples = build_samples_from_excel_pair(
-            hk_path=spec["hk_path"],
-            us_path=spec["us_path"],
-            hk_lookback=hk_lookback,
-            us_lookback=us_lookback,
-            company_id=spec["company_id"],
-            task_type=task_type,
-            target_col=target_col,
-            multiclass_num_classes=multiclass_num_classes,
-            multiclass_thresholds=multiclass_thresholds,
-            use_us_prev_night=use_us_prev_night,
-        )
+    for samples in _build_multi_company_parts(
+        company_specs=company_specs,
+        hk_lookback=hk_lookback,
+        us_lookback=us_lookback,
+        task_type=task_type,
+        target_col=target_col,
+        multiclass_num_classes=multiclass_num_classes,
+        multiclass_thresholds=multiclass_thresholds,
+        use_us_prev_night=use_us_prev_night,
+        normalization_mode=normalization_mode,
+        rolling_normalization_window=rolling_normalization_window,
+    ):
         total = len(samples["target"])
         train_end = int(total * train_ratio)
         val_end = train_end + int(total * val_ratio)
@@ -467,6 +514,11 @@ def build_multi_company_splits(
             part = {key: samples[key][split_slice] for key in array_keys}
             split_parts[split_name].append(part)
 
+    if normalization_mode == "train":
+        normalizer = _fit_feature_normalizer(split_parts["train"])
+        for split_name, parts in split_parts.items():
+            split_parts[split_name] = [_apply_feature_normalizer(part, normalizer) for part in parts]
+
     return (
         _concat_dataset_parts(split_parts["train"]),
         _concat_dataset_parts(split_parts["val"]),
@@ -474,7 +526,7 @@ def build_multi_company_splits(
     )
 
 
-def discover_standardized_pairs(dataset_root: str | Path) -> list[dict[str, str | int]]:
+def discover_factor_pairs(dataset_root: str | Path, file_suffix: str = "_Cleaned.xlsx") -> list[dict[str, str | int]]:
     dataset_root = Path(dataset_root)
     if not dataset_root.exists():
         raise ValueError(f"Dataset root does not exist: {dataset_root}")
@@ -482,12 +534,12 @@ def discover_standardized_pairs(dataset_root: str | Path) -> list[dict[str, str 
     company_specs = []
     company_id = 0
     for company_dir in sorted(path for path in dataset_root.iterdir() if path.is_dir() and path.name != "__MACOSX"):
-        standardized_files = sorted(company_dir.glob("*_Standardized.xlsx"))
-        hk_files = [path for path in standardized_files if ".HK_" in path.name or path.name.startswith("0")]
-        us_files = [path for path in standardized_files if path not in hk_files]
+        factor_files = sorted(company_dir.glob(f"*{file_suffix}"))
+        hk_files = [path for path in factor_files if _is_hk_file(path.name)]
+        us_files = [path for path in factor_files if path not in hk_files]
         if len(hk_files) != 1 or len(us_files) != 1:
             raise ValueError(
-                f"Expected exactly one HK and one US standardized file in {company_dir}, "
+                f"Expected exactly one HK and one US file ending with '{file_suffix}' in {company_dir}, "
                 f"got hk={len(hk_files)}, us={len(us_files)}."
             )
         company_specs.append(
@@ -502,6 +554,96 @@ def discover_standardized_pairs(dataset_root: str | Path) -> list[dict[str, str 
     if not company_specs:
         raise ValueError(f"No company pairs found under {dataset_root}.")
     return company_specs
+
+
+def discover_cleaned_pairs(dataset_root: str | Path) -> list[dict[str, str | int]]:
+    return discover_factor_pairs(dataset_root, file_suffix="_Cleaned.xlsx")
+
+
+def discover_standardized_pairs(dataset_root: str | Path) -> list[dict[str, str | int]]:
+    return discover_factor_pairs(dataset_root, file_suffix="_Standardized.xlsx")
+
+
+def _build_multi_company_parts(
+    company_specs: Sequence[dict],
+    hk_lookback: int,
+    us_lookback: int,
+    task_type: str,
+    target_col: str,
+    multiclass_num_classes: int,
+    multiclass_thresholds: Sequence[float] | None,
+    use_us_prev_night: bool,
+    normalization_mode: str,
+    rolling_normalization_window: int | None,
+) -> list[dict[str, np.ndarray]]:
+    parts = []
+    for spec in company_specs:
+        parts.append(
+            build_samples_from_excel_pair(
+                hk_path=spec["hk_path"],
+                us_path=spec["us_path"],
+                hk_lookback=hk_lookback,
+                us_lookback=us_lookback,
+                company_id=spec["company_id"],
+                task_type=task_type,
+                target_col=target_col,
+                multiclass_num_classes=multiclass_num_classes,
+                multiclass_thresholds=multiclass_thresholds,
+                use_us_prev_night=use_us_prev_night,
+                normalization_mode=normalization_mode,
+                rolling_normalization_window=rolling_normalization_window,
+            )
+        )
+    return parts
+
+
+def _validate_normalization_mode(normalization_mode: str) -> None:
+    if normalization_mode not in {"rolling", "train", "none"}:
+        raise ValueError("normalization_mode must be one of: 'rolling', 'train', 'none'.")
+
+
+def _rolling_normalize_window(
+    window: np.ndarray,
+    history: np.ndarray,
+    history_end: int,
+    rolling_window: int | None,
+) -> np.ndarray:
+    if rolling_window is not None and rolling_window <= 0:
+        raise ValueError("rolling_normalization_window must be positive or None.")
+    history_start = 0 if rolling_window is None else max(0, history_end - rolling_window)
+    history_values = history[history_start:history_end]
+    if len(history_values) == 0:
+        raise ValueError("Rolling normalization requires at least one historical row.")
+    mean, std = _mean_std(history_values)
+    return ((window - mean) / std).astype(np.float32)
+
+
+def _fit_feature_normalizer(parts: Sequence[dict[str, np.ndarray]]) -> FeatureNormalizer:
+    if not parts:
+        raise ValueError("Cannot fit feature normalizer without training parts.")
+    hk_values = np.concatenate([part["x_hk"].reshape(-1, part["x_hk"].shape[-1]) for part in parts], axis=0)
+    us_values = np.concatenate([part["x_us"].reshape(-1, part["x_us"].shape[-1]) for part in parts], axis=0)
+    hk_mean, hk_std = _mean_std(hk_values)
+    us_mean, us_std = _mean_std(us_values)
+    return FeatureNormalizer(hk_mean=hk_mean, hk_std=hk_std, us_mean=us_mean, us_std=us_std)
+
+
+def _apply_feature_normalizer(part: dict[str, np.ndarray], normalizer: FeatureNormalizer) -> dict[str, np.ndarray]:
+    normalized = dict(part)
+    normalized["x_hk"] = ((part["x_hk"] - normalizer.hk_mean) / normalizer.hk_std).astype(np.float32)
+    normalized["x_us"] = ((part["x_us"] - normalizer.us_mean) / normalizer.us_std).astype(np.float32)
+    return normalized
+
+
+def _mean_std(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mean = values.mean(axis=0, dtype=np.float64).astype(np.float32)
+    std = values.std(axis=0, dtype=np.float64).astype(np.float32)
+    std = np.where(std < 1e-6, 1.0, std).astype(np.float32)
+    return mean, std
+
+
+def _is_hk_file(filename: str) -> bool:
+    return ".HK_" in filename or filename.startswith("0")
 
 
 def _concat_dataset_parts(parts: Sequence[dict[str, np.ndarray]]) -> CrossMarketDataset:

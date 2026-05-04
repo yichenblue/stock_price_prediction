@@ -42,11 +42,16 @@ Expected sample fields:
 Notes:
 
 - Splits are chronological only through `chronological_split`.
-- Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Standardized.xlsx` inputs.
+- Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Cleaned.xlsx` inputs.
 - Multi-company train/val/test splitting is done per company first, then merged across companies.
 - Company-specific prediction heads sit on top of a shared backbone.
 - Padding masks are supported for future variable-length sequence handling.
-- The Excel loader supports your current files such as `09988_Factors_Standardized.xlsx` and `BABA_Factors_Standardized.xlsx`.
+- The default normalization mode is leak-free rolling normalization:
+  - `NORMALIZATION_MODE="rolling"`
+  - `ROLLING_NORMALIZATION_WINDOW=252`
+  - HK input windows are normalized with HK history available up to `t-1`
+  - US input windows are normalized with US history available up to the latest usable US session
+- The Excel loader supports your current files such as `09988.HK_Cleaned.xlsx` and `BABA_Cleaned.xlsx`.
 - The trainer now prints one log line per epoch and saves a train-vs-val plot if `matplotlib` is installed.
 - The current default task is `regression_peak_trough`:
   - inputs exclude `target_peak` to avoid target leakage
@@ -56,7 +61,7 @@ Notes:
   - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak
 - Other supported targets:
   - `regression_peak_trough`: predict HK `r1` and peak/trough class jointly
-  - `regression`: predict raw standardized `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
+  - `regression`: predict raw `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
   - `binary_classification`: predict whether `r1 > 0`
   - `multiclass_classification`: discretize `r1` with configured thresholds
 - For HK day `t`, the sample uses HK rows up to `t-1` and US rows up to the latest US session with `us_date < hk_date`.
