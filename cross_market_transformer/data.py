@@ -17,7 +17,7 @@ XLSX_REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 OFFICE_DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 LABEL_COLUMNS = {"target_peak"}
 P_INDEX_COLUMNS = {"P_index"}
-P_INDEX_MODES = {"feature", "none", "gap_gate"}
+P_INDEX_MODES = {"feature", "none", "gap_gate", "feature_plus_gap"}
 
 
 @dataclass
@@ -254,7 +254,7 @@ def build_samples_from_excel_pair(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "gap_gate",
+    p_index_mode: str = "feature_plus_gap",
     p_index_gap_threshold: float = 0.02,
 ) -> dict[str, np.ndarray]:
     """
@@ -359,9 +359,9 @@ def build_samples_from_excel_pair(
             include_latest=use_us_prev_night,
         )
         latest_us_gap_days = int((hk_date - us_dates[effective_us_latest_idx]).astype("timedelta64[D]").astype(int))
-        p_index_gap = float(hk_p_index[hk_idx - 1] - us_p_index[effective_us_latest_idx])
         p_index_gap_features = _p_index_gap_features(
-            p_index_gap=p_index_gap,
+            hk_p_index=float(hk_p_index[hk_idx - 1]),
+            us_p_index=float(us_p_index[effective_us_latest_idx]),
             threshold=p_index_gap_threshold,
             mode=p_index_mode,
         )
@@ -420,7 +420,7 @@ def build_multi_company_dataset(
     return_normalizer: bool = False,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "gap_gate",
+    p_index_mode: str = "feature_plus_gap",
     p_index_gap_threshold: float = 0.02,
 ) -> CrossMarketDataset | tuple[CrossMarketDataset, FeatureNormalizer | None]:
     x_hk_parts = []
@@ -513,7 +513,7 @@ def build_multi_company_splits(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "gap_gate",
+    p_index_mode: str = "feature_plus_gap",
     p_index_gap_threshold: float = 0.02,
     normalize_features: bool | None = None,
 ) -> tuple[CrossMarketDataset, CrossMarketDataset, CrossMarketDataset]:
@@ -658,16 +658,20 @@ def _validate_normalization_mode(normalization_mode: str) -> None:
 
 def _validate_p_index_mode(p_index_mode: str) -> None:
     if p_index_mode not in P_INDEX_MODES:
-        raise ValueError("p_index_mode must be one of: 'feature', 'none', 'gap_gate'.")
+        raise ValueError("p_index_mode must be one of: 'feature', 'none', 'gap_gate', 'feature_plus_gap'.")
 
 
 def _p_index_gap_features(
-    p_index_gap: float,
+    hk_p_index: float,
+    us_p_index: float,
     threshold: float,
     mode: str,
 ) -> np.ndarray:
     if threshold < 0:
         raise ValueError("p_index_gap_threshold must be non-negative.")
+    p_index_gap = hk_p_index - us_p_index
+    if mode == "feature_plus_gap":
+        return np.asarray([hk_p_index, us_p_index, p_index_gap, abs(p_index_gap)], dtype=np.float32)
     if mode != "gap_gate":
         return np.zeros(3, dtype=np.float32)
 

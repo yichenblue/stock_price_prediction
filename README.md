@@ -38,7 +38,7 @@ Expected sample fields:
 - `x_us`: `[num_samples, us_seq_len, us_input_dim]`
 - `company_id`: `[num_samples]`
 - `us_open_prev_night`: `[num_samples]`, values in `{0, 1}`
-- `p_index_gap_features`: `[num_samples, 3]`, values are non-zero only when `P_INDEX_MODE="gap_gate"`
+- `p_index_gap_features`: `[num_samples, 3 or 4]`, auxiliary P-index features used by `gap_gate` and `feature_plus_gap`
 - `target`: shape depends on task
 
 Notes:
@@ -65,8 +65,9 @@ Notes:
   - `feature`: use `P_index` as a normal HK/US sequence feature
   - `none`: remove `P_index` entirely
   - `gap_gate`: remove `P_index` from HK/US sequence features, compute `HK P_index(t-1) - US P_index(latest usable US session)`, and inject thresholded discrepancy features into the pre-open query
-  - The default is `gap_gate`, so the default HK/US input dimension excludes `P_index`.
-  - HK-only baselines accept the batch field but do not use the discrepancy gate, so they remain HK-only.
+  - `feature_plus_gap`: use `P_index` as a normal HK/US sequence feature, and also inject `[HK latest P_index, US latest P_index, gap, abs(gap)]` into the pre-open query
+  - The default is `feature_plus_gap`, so the default HK/US input dimension includes `P_index`.
+  - HK-only baselines accept the batch field but do not use auxiliary cross-market P-index features, so they remain HK-only.
 - Other supported targets:
   - `regression_peak_trough`: predict HK `r1` and peak/trough class jointly
   - `regression`: predict raw `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
@@ -90,6 +91,7 @@ Notes:
   - A. `P_index` as a normal feature
   - B. no `P_index`
   - C. P-index discrepancy gate
+  - D. `P_index` as a normal feature plus soft discrepancy features
 - `run_shared_head.py` runs the shared-head generalization experiment:
   - all legacy-company samples are used for training
   - no validation split is used

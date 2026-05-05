@@ -137,6 +137,7 @@ def main() -> None:
         num_companies=1,
         hk_input_dim=train_loader.dataset.x_hk.shape[-1],
         us_input_dim=train_loader.dataset.x_us.shape[-1],
+        p_index_gap_feature_dim=train_loader.dataset.p_index_gap_features.shape[-1],
     )
     train_config = deepcopy(TRAIN_CONFIG)
     train_config.checkpoint_name = "cross_market_shared_head.pt"

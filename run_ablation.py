@@ -78,6 +78,7 @@ def main() -> None:
     train_loader, val_loader, test_loader = make_dataloaders(company_specs)
     hk_input_dim = train_loader.dataset.x_hk.shape[-1]
     us_input_dim = train_loader.dataset.x_us.shape[-1]
+    p_index_gap_feature_dim = train_loader.dataset.p_index_gap_features.shape[-1]
 
     print("Loaded leak-free cleaned company pairs:")
     for spec in company_specs:
@@ -97,6 +98,7 @@ def main() -> None:
             num_companies=len(company_specs),
             hk_input_dim=hk_input_dim,
             us_input_dim=us_input_dim,
+            p_index_gap_feature_dim=p_index_gap_feature_dim,
         )
         train_config = deepcopy(TRAIN_CONFIG)
         train_config.checkpoint_name = f"{exp_name}.pt"

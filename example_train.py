@@ -60,6 +60,7 @@ def main() -> None:
         num_companies=len(company_specs),
         hk_input_dim=train_set.x_hk.shape[-1],
         us_input_dim=train_set.x_us.shape[-1],
+        p_index_gap_feature_dim=train_set.p_index_gap_features.shape[-1],
     )
 
     train_loader = DataLoader(

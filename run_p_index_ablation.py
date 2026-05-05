@@ -45,6 +45,11 @@ P_INDEX_EXPERIMENTS = [
         "gap_gate",
         "C. Remove P_index from sequence features and inject thresholded HK-US discrepancy into the pre-open query.",
     ),
+    (
+        "p_index_feature_plus_gap",
+        "feature_plus_gap",
+        "D. Keep P_index as a normal feature and inject soft HK-US discrepancy features into the pre-open query.",
+    ),
 ]
 
 
@@ -138,6 +143,7 @@ def main() -> None:
             hk_input_dim=hk_input_dim,
             us_input_dim=us_input_dim,
             p_index_mode=p_index_mode,
+            p_index_gap_feature_dim=train_set.p_index_gap_features.shape[-1],
         )
         model = CrossMarketTransformerModel(model_config)
         trainer = Trainer(

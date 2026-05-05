@@ -21,8 +21,8 @@ class ModelConfig:
     head_hidden_dim: int = 64
     dropout: float = 0.1
     layer_norm_eps: float = 1e-5
-    p_index_mode: str = "gap_gate"
-    p_index_gap_feature_dim: int = 3
+    p_index_mode: str = "feature_plus_gap"
+    p_index_gap_feature_dim: int = 4
 
 
 @dataclass

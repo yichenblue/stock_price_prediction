@@ -176,7 +176,7 @@ class CrossMarketFusion(nn.Module):
 
 
 class PIndexGapEncoder(nn.Module):
-    """Encode thresholded HK-US P-index discrepancy features."""
+    """Encode auxiliary HK-US P-index discrepancy features."""
 
     def __init__(
         self,
@@ -193,7 +193,7 @@ class PIndexGapEncoder(nn.Module):
         )
 
     def forward(self, p_index_gap_features: torch.Tensor) -> torch.Tensor:
-        # p_index_gap_features: [batch, 3] = [positive_excess, negative_excess, active_flag]
+        # p_index_gap_features: [batch, p_index_gap_feature_dim]
         return self.projection(p_index_gap_features.float())
 
 
@@ -206,7 +206,7 @@ class PreOpenAggregator(nn.Module):
         dropout: float,
         layer_norm_eps: float,
         use_p_index_gap_gate: bool = False,
-        p_index_gap_feature_dim: int = 3,
+        p_index_gap_feature_dim: int = 4,
     ) -> None:
         super().__init__()
         self.pre_open_query = nn.Parameter(torch.randn(1, 1, d_model))
@@ -260,7 +260,7 @@ class PreOpenAggregator(nn.Module):
         query = query + self.global_timing_projection(timing_features).unsqueeze(1)
         if self.p_index_gap_encoder is not None:
             if p_index_gap_features is None:
-                raise ValueError("p_index_gap_features is required when p_index_mode='gap_gate'.")
+                raise ValueError("p_index_gap_features is required when p_index_mode uses auxiliary P-index features.")
             query = query + self.p_index_gap_encoder(p_index_gap_features).unsqueeze(1)
 
         attended, _ = self.attn(
@@ -596,6 +596,6 @@ def _resolve_output_dim(task_type: str, num_classes: int) -> int:
 
 
 def _uses_p_index_gap_gate(config: ModelConfig) -> bool:
-    if config.p_index_mode not in {"feature", "none", "gap_gate"}:
-        raise ValueError("config.p_index_mode must be one of: 'feature', 'none', 'gap_gate'.")
-    return config.p_index_mode == "gap_gate"
+    if config.p_index_mode not in {"feature", "none", "gap_gate", "feature_plus_gap"}:
+        raise ValueError("config.p_index_mode must be one of: 'feature', 'none', 'gap_gate', 'feature_plus_gap'.")
+    return config.p_index_mode in {"gap_gate", "feature_plus_gap"}
