@@ -347,7 +347,7 @@ class Trainer:
                 target[:, 1].long(),
                 weight=class_weight,
             )
-            return 0.5 * r1_loss + peak_trough_loss
+            return self.train_config.r1_loss_weight * r1_loss + self.train_config.peak_trough_loss_weight * peak_trough_loss
         if self.task_type == "binary_classification":
             return self.criterion(logits.float().view(-1), target.float().view(-1))
         return self.criterion(logits.float(), target.long().view(-1))

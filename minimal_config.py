@@ -41,6 +41,8 @@ TRAIN_CONFIG = TrainConfig(
     checkpoint_name="cross_market_transformer.pt",
     scheduler_type="plateau",
     class_weight=[5.0, 1.0, 5.0],
+    r1_loss_weight=50.0,
+    peak_trough_loss_weight=1.0,
     plot_history=True,
     history_plot_name="cross_market_training_history.png",
 )

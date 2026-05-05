@@ -42,6 +42,8 @@ class TrainConfig:
     log_every_n_steps: int = 20
     save_best_only: bool = True
     class_weight: Optional[list[float]] = field(default=None)
+    r1_loss_weight: float = 0.5
+    peak_trough_loss_weight: float = 1.0
     plot_history: bool = True
     history_plot_name: str = "training_history.png"
     save_threshold_sweep: bool = True
