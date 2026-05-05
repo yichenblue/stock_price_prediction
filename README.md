@@ -90,8 +90,7 @@ Notes:
 - `run_p_index_ablation.py` compares:
   - A. `P_index` as a normal feature
   - B. no `P_index`
-  - C. P-index discrepancy gate
-  - D. `P_index` as a normal feature plus soft discrepancy features
+  - C. `P_index` as a normal feature plus soft discrepancy features
 - `run_shared_head.py` runs the shared-head generalization experiment:
   - all legacy-company samples are used for training
   - no validation split is used
