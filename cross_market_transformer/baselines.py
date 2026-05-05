@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from .config import ModelConfig
-from .model import CompanySpecificHeads
+from .model import CompanySpecificHeads, PIndexGapEncoder
 
 
 def _resolve_output_dim(task_type: str, num_classes: int) -> int:
@@ -45,6 +45,7 @@ class HKOnlyBaseline(nn.Module):
             nn.Dropout(config.dropout),
         )
         self.session_embedding = nn.Embedding(2, config.d_model)
+        self.p_index_gap_encoder = None
         self.company_heads = CompanySpecificHeads(
             num_companies=config.num_companies,
             input_dim=config.d_model,
@@ -63,10 +64,11 @@ class HKOnlyBaseline(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        del x_us, us_padding_mask, hk_time_delta, us_time_delta, us_sessions_since_last_hk, latest_us_gap_days
+        del x_us, us_padding_mask, hk_time_delta, us_time_delta, us_sessions_since_last_hk, latest_us_gap_days, p_index_gap_features
         hk_hidden = self.hk_projection(x_hk)  # [batch, hk_len, d_model]
         z = masked_mean_pool(hk_hidden, hk_padding_mask)
         z = z + self.session_embedding(us_open_prev_night)
@@ -97,6 +99,15 @@ class HKUSConcatBaseline(nn.Module):
             nn.Dropout(config.dropout),
         )
         self.session_embedding = nn.Embedding(2, config.d_model)
+        self.p_index_gap_encoder = (
+            PIndexGapEncoder(
+                input_dim=config.p_index_gap_feature_dim,
+                d_model=config.d_model,
+                dropout=config.dropout,
+            )
+            if _uses_p_index_gap_gate(config)
+            else None
+        )
         self.fusion = nn.Sequential(
             nn.Linear(config.d_model * 2, config.d_model),
             nn.GELU(),
@@ -120,6 +131,7 @@ class HKUSConcatBaseline(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -130,7 +142,17 @@ class HKUSConcatBaseline(nn.Module):
         us_z = masked_mean_pool(us_hidden, us_padding_mask)
         z = self.fusion(torch.cat([hk_z, us_z], dim=-1))
         z = z + self.session_embedding(us_open_prev_night)
+        if self.p_index_gap_encoder is not None:
+            if p_index_gap_features is None:
+                raise ValueError("p_index_gap_features is required when p_index_mode='gap_gate'.")
+            z = z + self.p_index_gap_encoder(p_index_gap_features)
         logits = self.company_heads(z, company_id)
         if self.config.task_type == "regression":
             return logits.squeeze(-1)
         return logits
+
+
+def _uses_p_index_gap_gate(config: ModelConfig) -> bool:
+    if config.p_index_mode not in {"feature", "none", "gap_gate"}:
+        raise ValueError("config.p_index_mode must be one of: 'feature', 'none', 'gap_gate'.")
+    return config.p_index_mode == "gap_gate"

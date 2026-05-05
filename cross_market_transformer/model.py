@@ -175,6 +175,28 @@ class CrossMarketFusion(nn.Module):
         return x
 
 
+class PIndexGapEncoder(nn.Module):
+    """Encode thresholded HK-US P-index discrepancy features."""
+
+    def __init__(
+        self,
+        input_dim: int,
+        d_model: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.projection = nn.Sequential(
+            nn.Linear(input_dim, d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model),
+        )
+
+    def forward(self, p_index_gap_features: torch.Tensor) -> torch.Tensor:
+        # p_index_gap_features: [batch, 3] = [positive_excess, negative_excess, active_flag]
+        return self.projection(p_index_gap_features.float())
+
+
 class PreOpenAggregator(nn.Module):
     def __init__(
         self,
@@ -183,6 +205,8 @@ class PreOpenAggregator(nn.Module):
         num_companies: int,
         dropout: float,
         layer_norm_eps: float,
+        use_p_index_gap_gate: bool = False,
+        p_index_gap_feature_dim: int = 3,
     ) -> None:
         super().__init__()
         self.pre_open_query = nn.Parameter(torch.randn(1, 1, d_model))
@@ -192,6 +216,15 @@ class PreOpenAggregator(nn.Module):
             nn.Linear(2, d_model),
             nn.GELU(),
             nn.Dropout(dropout),
+        )
+        self.p_index_gap_encoder = (
+            PIndexGapEncoder(
+                input_dim=p_index_gap_feature_dim,
+                d_model=d_model,
+                dropout=dropout,
+            )
+            if use_p_index_gap_gate
+            else None
         )
         self.attn = nn.MultiheadAttention(
             embed_dim=d_model,
@@ -209,6 +242,7 @@ class PreOpenAggregator(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # fused_hk: [batch, hk_len, d_model]
@@ -224,6 +258,10 @@ class PreOpenAggregator(nn.Module):
             dim=-1,
         )  # [batch, 2]
         query = query + self.global_timing_projection(timing_features).unsqueeze(1)
+        if self.p_index_gap_encoder is not None:
+            if p_index_gap_features is None:
+                raise ValueError("p_index_gap_features is required when p_index_mode='gap_gate'.")
+            query = query + self.p_index_gap_encoder(p_index_gap_features).unsqueeze(1)
 
         attended, _ = self.attn(
             query=query,
@@ -328,6 +366,8 @@ class CrossMarketTransformerModel(nn.Module):
             num_companies=config.num_companies,
             dropout=config.dropout,
             layer_norm_eps=config.layer_norm_eps,
+            use_p_index_gap_gate=_uses_p_index_gap_gate(config),
+            p_index_gap_feature_dim=config.p_index_gap_feature_dim,
         )
         self.company_specific_heads = CompanySpecificHeads(
             num_companies=config.num_companies,
@@ -347,6 +387,7 @@ class CrossMarketTransformerModel(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -365,6 +406,7 @@ class CrossMarketTransformerModel(nn.Module):
             us_open_prev_night=us_open_prev_night,
             us_sessions_since_last_hk=us_sessions_since_last_hk,
             latest_us_gap_days=latest_us_gap_days,
+            p_index_gap_features=p_index_gap_features,
             hk_padding_mask=hk_padding_mask,
         )
         logits = self.company_specific_heads(z, company_id)
@@ -419,6 +461,8 @@ class CrossMarketTransformerSharedHeadModel(nn.Module):
             num_companies=config.num_companies,
             dropout=config.dropout,
             layer_norm_eps=config.layer_norm_eps,
+            use_p_index_gap_gate=_uses_p_index_gap_gate(config),
+            p_index_gap_feature_dim=config.p_index_gap_feature_dim,
         )
         self.shared_head = SharedHead(
             input_dim=config.d_model,
@@ -437,6 +481,7 @@ class CrossMarketTransformerSharedHeadModel(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -455,6 +500,7 @@ class CrossMarketTransformerSharedHeadModel(nn.Module):
             us_open_prev_night=us_open_prev_night,
             us_sessions_since_last_hk=us_sessions_since_last_hk,
             latest_us_gap_days=latest_us_gap_days,
+            p_index_gap_features=p_index_gap_features,
             hk_padding_mask=hk_padding_mask,
         )
         logits = self.shared_head(z)
@@ -491,6 +537,8 @@ class HKTransformerOnlyModel(nn.Module):
             num_companies=config.num_companies,
             dropout=config.dropout,
             layer_norm_eps=config.layer_norm_eps,
+            use_p_index_gap_gate=False,
+            p_index_gap_feature_dim=config.p_index_gap_feature_dim,
         )
         self.company_specific_heads = CompanySpecificHeads(
             num_companies=config.num_companies,
@@ -510,6 +558,7 @@ class HKTransformerOnlyModel(nn.Module):
         us_open_prev_night: torch.Tensor,
         us_sessions_since_last_hk: torch.Tensor,
         latest_us_gap_days: torch.Tensor,
+        p_index_gap_features: torch.Tensor | None = None,
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
@@ -521,6 +570,7 @@ class HKTransformerOnlyModel(nn.Module):
             us_open_prev_night=us_open_prev_night,
             us_sessions_since_last_hk=us_sessions_since_last_hk,
             latest_us_gap_days=latest_us_gap_days,
+            p_index_gap_features=p_index_gap_features,
             hk_padding_mask=hk_padding_mask,
         )
         logits = self.company_specific_heads(z, company_id)
@@ -543,3 +593,9 @@ def _resolve_output_dim(task_type: str, num_classes: int) -> int:
             raise ValueError("num_classes must be >= 2 for multiclass classification.")
         return num_classes
     raise ValueError(f"Unsupported task_type: {task_type}")
+
+
+def _uses_p_index_gap_gate(config: ModelConfig) -> bool:
+    if config.p_index_mode not in {"feature", "none", "gap_gate"}:
+        raise ValueError("config.p_index_mode must be one of: 'feature', 'none', 'gap_gate'.")
+    return config.p_index_mode == "gap_gate"

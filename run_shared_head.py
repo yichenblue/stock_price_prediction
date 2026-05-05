@@ -19,6 +19,8 @@ from minimal_config import (
     HK_LOOKBACK,
     MODEL_CONFIG,
     NORMALIZATION_MODE,
+    P_INDEX_GAP_THRESHOLD,
+    P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
@@ -49,6 +51,7 @@ def _with_shared_company_id(dataset: CrossMarketDataset) -> CrossMarketDataset:
         us_open_prev_night=dataset.us_open_prev_night,
         us_sessions_since_last_hk=dataset.us_sessions_since_last_hk,
         latest_us_gap_days=dataset.latest_us_gap_days,
+        p_index_gap_features=dataset.p_index_gap_features,
         target=dataset.target,
         hk_padding_mask=dataset.hk_padding_mask,
         us_padding_mask=dataset.us_padding_mask,
@@ -79,6 +82,8 @@ def make_dataloaders(base_specs, held_out_specs):
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
     test_set = build_multi_company_dataset(
         company_specs=held_out_specs,
@@ -90,6 +95,8 @@ def make_dataloaders(base_specs, held_out_specs):
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
     return (
         _make_loader(_with_shared_company_id(train_set)),
@@ -125,7 +132,12 @@ def main() -> None:
         )
     print()
 
-    model_config = replace(deepcopy(MODEL_CONFIG), num_companies=1)
+    model_config = replace(
+        deepcopy(MODEL_CONFIG),
+        num_companies=1,
+        hk_input_dim=train_loader.dataset.x_hk.shape[-1],
+        us_input_dim=train_loader.dataset.x_us.shape[-1],
+    )
     train_config = deepcopy(TRAIN_CONFIG)
     train_config.checkpoint_name = "cross_market_shared_head.pt"
     train_config.history_plot_name = "cross_market_shared_head_history.png"

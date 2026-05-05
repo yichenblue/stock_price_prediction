@@ -11,10 +11,12 @@ TARGET_COL = "r1"
 USE_US_PREV_NIGHT = True
 NORMALIZATION_MODE = "rolling"
 ROLLING_NORMALIZATION_WINDOW = 252
+P_INDEX_MODE = "gap_gate"
+P_INDEX_GAP_THRESHOLD = 0.02
 
 MODEL_CONFIG = ModelConfig(
-    hk_input_dim=29,
-    us_input_dim=29,
+    hk_input_dim=28,
+    us_input_dim=28,
     num_companies=1,
     max_hk_len=HK_LOOKBACK,
     max_us_len=US_LOOKBACK,
@@ -27,6 +29,7 @@ MODEL_CONFIG = ModelConfig(
     num_fusion_layers=1,
     head_hidden_dim=64,
     dropout=0.3,
+    p_index_mode=P_INDEX_MODE,
 )
 
 

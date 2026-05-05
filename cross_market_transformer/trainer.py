@@ -154,6 +154,7 @@ class Trainer:
                     us_open_prev_night=batch.us_open_prev_night,
                     us_sessions_since_last_hk=batch.us_sessions_since_last_hk,
                     latest_us_gap_days=batch.latest_us_gap_days,
+                    p_index_gap_features=batch.p_index_gap_features,
                     hk_padding_mask=batch.hk_padding_mask,
                     us_padding_mask=batch.us_padding_mask,
                 )
@@ -238,6 +239,7 @@ class Trainer:
                     us_open_prev_night=batch.us_open_prev_night,
                     us_sessions_since_last_hk=batch.us_sessions_since_last_hk,
                     latest_us_gap_days=batch.latest_us_gap_days,
+                    p_index_gap_features=batch.p_index_gap_features,
                     hk_padding_mask=batch.hk_padding_mask,
                     us_padding_mask=batch.us_padding_mask,
                 )
@@ -263,6 +265,7 @@ class Trainer:
                 us_open_prev_night=batch.us_open_prev_night,
                 us_sessions_since_last_hk=batch.us_sessions_since_last_hk,
                 latest_us_gap_days=batch.latest_us_gap_days,
+                p_index_gap_features=batch.p_index_gap_features,
                 hk_padding_mask=batch.hk_padding_mask,
                 us_padding_mask=batch.us_padding_mask,
             )

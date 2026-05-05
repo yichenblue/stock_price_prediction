@@ -16,6 +16,7 @@ Modules:
 - `example_train.py`
 - `minimal_config.py`
 - `run_ablation.py`
+- `run_p_index_ablation.py`
 - `run_shared_head.py`
 
 Minimal usage:
@@ -37,6 +38,7 @@ Expected sample fields:
 - `x_us`: `[num_samples, us_seq_len, us_input_dim]`
 - `company_id`: `[num_samples]`
 - `us_open_prev_night`: `[num_samples]`, values in `{0, 1}`
+- `p_index_gap_features`: `[num_samples, 3]`, values are non-zero only when `P_INDEX_MODE="gap_gate"`
 - `target`: shape depends on task
 
 Notes:
@@ -59,6 +61,12 @@ Notes:
   - model output is `[r1_pred, trough_logit, neutral_logit, peak_logit]`
   - `softmax(output[:, 1:4])` gives `[trough_prob, neutral_prob, peak_prob]`
   - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak
+- `P_index` is configurable through `P_INDEX_MODE`:
+  - `feature`: use `P_index` as a normal HK/US sequence feature
+  - `none`: remove `P_index` entirely
+  - `gap_gate`: remove `P_index` from HK/US sequence features, compute `HK P_index(t-1) - US P_index(latest usable US session)`, and inject thresholded discrepancy features into the pre-open query
+  - The default is `gap_gate`, so the default HK/US input dimension excludes `P_index`.
+  - HK-only baselines accept the batch field but do not use the discrepancy gate, so they remain HK-only.
 - Other supported targets:
   - `regression_peak_trough`: predict HK `r1` and peak/trough class jointly
   - `regression`: predict raw `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
@@ -78,6 +86,10 @@ Notes:
   - `hk_us_concat`
   - `hk_transformer_only`
   - `cross_market_transformer`
+- `run_p_index_ablation.py` compares:
+  - A. `P_index` as a normal feature
+  - B. no `P_index`
+  - C. P-index discrepancy gate
 - `run_shared_head.py` runs the shared-head generalization experiment:
   - all legacy-company samples are used for training
   - no validation split is used

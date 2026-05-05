@@ -17,6 +17,8 @@ from minimal_config import (
     HK_LOOKBACK,
     MODEL_CONFIG,
     NORMALIZATION_MODE,
+    P_INDEX_GAP_THRESHOLD,
+    P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
@@ -35,7 +37,6 @@ def main() -> None:
         )
     print()
 
-    model_config = replace(MODEL_CONFIG, num_companies=len(company_specs))
     train_config = TRAIN_CONFIG
 
     train_set, val_set, test_set = build_multi_company_splits(
@@ -45,12 +46,20 @@ def main() -> None:
         train_ratio=0.7,
         val_ratio=0.15,
         test_ratio=0.15,
-        task_type=model_config.task_type,
+        task_type=MODEL_CONFIG.task_type,
         target_col=TARGET_COL,
-        multiclass_num_classes=model_config.num_classes,
+        multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
+    )
+    model_config = replace(
+        MODEL_CONFIG,
+        num_companies=len(company_specs),
+        hk_input_dim=train_set.x_hk.shape[-1],
+        us_input_dim=train_set.x_us.shape[-1],
     )
 
     train_loader = DataLoader(

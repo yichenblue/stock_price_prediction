@@ -8,6 +8,8 @@ from minimal_config import (
     HK_LOOKBACK,
     MODEL_CONFIG,
     NORMALIZATION_MODE,
+    P_INDEX_GAP_THRESHOLD,
+    P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     USE_US_PREV_NIGHT,
@@ -65,6 +67,8 @@ def main() -> None:
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
     train_targets = train_set.target.numpy().astype(np.float64)
     val_targets = val_set.target.numpy().astype(np.float64)

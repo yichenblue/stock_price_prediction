@@ -20,6 +20,8 @@ from minimal_config import (
     HK_LOOKBACK,
     MODEL_CONFIG,
     NORMALIZATION_MODE,
+    P_INDEX_GAP_THRESHOLD,
+    P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
     TRAIN_CONFIG,
@@ -52,6 +54,8 @@ def make_dataloaders(company_specs):
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
     return (
         _make_loader(train_set),
@@ -72,6 +76,8 @@ def main() -> None:
     torch.manual_seed(42)
     company_specs = discover_cleaned_pairs(DATASET_ROOT)
     train_loader, val_loader, test_loader = make_dataloaders(company_specs)
+    hk_input_dim = train_loader.dataset.x_hk.shape[-1]
+    us_input_dim = train_loader.dataset.x_us.shape[-1]
 
     print("Loaded leak-free cleaned company pairs:")
     for spec in company_specs:
@@ -86,7 +92,12 @@ def main() -> None:
         print("=" * 100)
         print(f"Running experiment: {exp_name}")
 
-        model_config = replace(deepcopy(MODEL_CONFIG), num_companies=len(company_specs))
+        model_config = replace(
+            deepcopy(MODEL_CONFIG),
+            num_companies=len(company_specs),
+            hk_input_dim=hk_input_dim,
+            us_input_dim=us_input_dim,
+        )
         train_config = deepcopy(TRAIN_CONFIG)
         train_config.checkpoint_name = f"{exp_name}.pt"
         train_config.history_plot_name = f"{exp_name}_history.png"

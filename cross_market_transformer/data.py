@@ -16,6 +16,8 @@ XLSX_NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 XLSX_REL_NS = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 OFFICE_DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 LABEL_COLUMNS = {"target_peak"}
+P_INDEX_COLUMNS = {"P_index"}
+P_INDEX_MODES = {"feature", "none", "gap_gate"}
 
 
 @dataclass
@@ -30,6 +32,7 @@ class SampleBatch:
     us_open_prev_night: torch.Tensor
     us_sessions_since_last_hk: torch.Tensor
     latest_us_gap_days: torch.Tensor
+    p_index_gap_features: torch.Tensor
     target: torch.Tensor
 
     def to(self, device: torch.device | str) -> "SampleBatch":
@@ -44,6 +47,7 @@ class SampleBatch:
             us_open_prev_night=self.us_open_prev_night.to(device),
             us_sessions_since_last_hk=self.us_sessions_since_last_hk.to(device),
             latest_us_gap_days=self.latest_us_gap_days.to(device),
+            p_index_gap_features=self.p_index_gap_features.to(device),
             target=self.target.to(device),
         )
 
@@ -69,6 +73,7 @@ class CrossMarketDataset(Dataset):
         us_open_prev_night: np.ndarray | torch.Tensor,
         us_sessions_since_last_hk: np.ndarray | torch.Tensor,
         latest_us_gap_days: np.ndarray | torch.Tensor,
+        p_index_gap_features: np.ndarray | torch.Tensor,
         target: np.ndarray | torch.Tensor,
         hk_padding_mask: np.ndarray | torch.Tensor | None = None,
         us_padding_mask: np.ndarray | torch.Tensor | None = None,
@@ -81,6 +86,7 @@ class CrossMarketDataset(Dataset):
         self.us_open_prev_night = self._to_tensor(us_open_prev_night, dtype=torch.long)
         self.us_sessions_since_last_hk = self._to_tensor(us_sessions_since_last_hk, dtype=torch.float32)
         self.latest_us_gap_days = self._to_tensor(latest_us_gap_days, dtype=torch.float32)
+        self.p_index_gap_features = self._to_tensor(p_index_gap_features, dtype=torch.float32)
         self.target = self._to_tensor(target)
 
         num_samples = self.x_hk.shape[0]
@@ -106,6 +112,10 @@ class CrossMarketDataset(Dataset):
             raise ValueError("company_id and us_open_prev_night must match sample count.")
         if self.us_sessions_since_last_hk.shape[0] != n or self.latest_us_gap_days.shape[0] != n:
             raise ValueError("Global timing features must match sample count.")
+        if self.p_index_gap_features.shape[0] != n:
+            raise ValueError("P-index gap features must match sample count.")
+        if self.p_index_gap_features.ndim != 2:
+            raise ValueError("P-index gap features must be a 2D tensor: [num_samples, num_features].")
         if self.target.shape[0] != n:
             raise ValueError("target must match sample count.")
         if self.hk_padding_mask.shape[:2] != self.x_hk.shape[:2]:
@@ -138,6 +148,7 @@ class CrossMarketDataset(Dataset):
             "us_open_prev_night": self.us_open_prev_night[index],
             "us_sessions_since_last_hk": self.us_sessions_since_last_hk[index],
             "latest_us_gap_days": self.latest_us_gap_days[index],
+            "p_index_gap_features": self.p_index_gap_features[index],
             "target": self.target[index],
         }
 
@@ -153,6 +164,7 @@ def numpy_collate_fn(batch: Sequence[dict[str, torch.Tensor]]) -> SampleBatch:
     us_open_prev_night = torch.stack([item["us_open_prev_night"] for item in batch], dim=0)
     us_sessions_since_last_hk = torch.stack([item["us_sessions_since_last_hk"] for item in batch], dim=0)
     latest_us_gap_days = torch.stack([item["latest_us_gap_days"] for item in batch], dim=0)
+    p_index_gap_features = torch.stack([item["p_index_gap_features"] for item in batch], dim=0)
     target = torch.stack([item["target"] for item in batch], dim=0)
     return SampleBatch(
         x_hk=x_hk,
@@ -165,6 +177,7 @@ def numpy_collate_fn(batch: Sequence[dict[str, torch.Tensor]]) -> SampleBatch:
         us_open_prev_night=us_open_prev_night,
         us_sessions_since_last_hk=us_sessions_since_last_hk,
         latest_us_gap_days=latest_us_gap_days,
+        p_index_gap_features=p_index_gap_features,
         target=target,
     )
 
@@ -241,6 +254,8 @@ def build_samples_from_excel_pair(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
+    p_index_mode: str = "gap_gate",
+    p_index_gap_threshold: float = 0.02,
 ) -> dict[str, np.ndarray]:
     """
     Build aligned samples for one HK/US listed company pair.
@@ -254,6 +269,7 @@ def build_samples_from_excel_pair(
     - target uses the HK row at date t
     """
     _validate_normalization_mode(normalization_mode)
+    _validate_p_index_mode(p_index_mode)
     hk_data = load_factor_xlsx(hk_path)
     us_data = load_factor_xlsx(us_path)
 
@@ -265,6 +281,9 @@ def build_samples_from_excel_pair(
     if target_col not in hk_feature_names:
         raise ValueError(f"target_col '{target_col}' not found in HK features.")
     target_idx = hk_feature_names.index(target_col)
+    if "P_index" not in hk_feature_names:
+        raise ValueError("P-index mode requires a 'P_index' column.")
+    p_index_idx = hk_feature_names.index("P_index")
     target_peak_idx = None
     if task_type == "regression_peak_trough":
         if "target_peak" not in hk_feature_names:
@@ -272,7 +291,10 @@ def build_samples_from_excel_pair(
         target_peak_idx = hk_feature_names.index("target_peak")
         if multiclass_num_classes != 3:
             raise ValueError("regression_peak_trough requires multiclass_num_classes=3.")
-    input_indices = [idx for idx, name in enumerate(hk_feature_names) if name not in LABEL_COLUMNS]
+    excluded_columns = set(LABEL_COLUMNS)
+    if p_index_mode in {"none", "gap_gate"}:
+        excluded_columns.update(P_INDEX_COLUMNS)
+    input_indices = [idx for idx, name in enumerate(hk_feature_names) if name not in excluded_columns]
     input_feature_names = [hk_feature_names[idx] for idx in input_indices]
 
     hk_dates = hk_data["dates"]
@@ -281,6 +303,8 @@ def build_samples_from_excel_pair(
     us_dates = us_data["dates"]
     us_all_features = us_data["features"]
     us_features = us_all_features[:, input_indices]
+    hk_p_index = hk_all_features[:, p_index_idx]
+    us_p_index = us_all_features[:, p_index_idx]
     hk_rolling_prefix = _rolling_stat_prefixes(hk_features) if normalization_mode == "rolling" else None
     us_rolling_prefix = _rolling_stat_prefixes(us_features) if normalization_mode == "rolling" else None
 
@@ -292,6 +316,7 @@ def build_samples_from_excel_pair(
     session_flags = []
     us_sessions_since_last_hk_list = []
     latest_us_gap_days_list = []
+    p_index_gap_features_list = []
     targets = []
     sample_dates = []
 
@@ -334,6 +359,12 @@ def build_samples_from_excel_pair(
             include_latest=use_us_prev_night,
         )
         latest_us_gap_days = int((hk_date - us_dates[effective_us_latest_idx]).astype("timedelta64[D]").astype(int))
+        p_index_gap = float(hk_p_index[hk_idx - 1] - us_p_index[effective_us_latest_idx])
+        p_index_gap_features = _p_index_gap_features(
+            p_index_gap=p_index_gap,
+            threshold=p_index_gap_threshold,
+            mode=p_index_mode,
+        )
 
         x_hk_list.append(hk_window.astype(np.float32))
         x_us_list.append(us_window.astype(np.float32))
@@ -343,6 +374,7 @@ def build_samples_from_excel_pair(
         session_flags.append(_was_us_open_prev_night(hk_date, us_dates) if use_us_prev_night else 0)
         us_sessions_since_last_hk_list.append(float(us_sessions_since_last_hk))
         latest_us_gap_days_list.append(float(latest_us_gap_days))
+        p_index_gap_features_list.append(p_index_gap_features)
         targets.append(
             _build_target(
                 target_value=target_value,
@@ -367,6 +399,7 @@ def build_samples_from_excel_pair(
         "us_open_prev_night": np.asarray(session_flags, dtype=np.int64),
         "us_sessions_since_last_hk": np.asarray(us_sessions_since_last_hk_list, dtype=np.float32),
         "latest_us_gap_days": np.asarray(latest_us_gap_days_list, dtype=np.float32),
+        "p_index_gap_features": np.asarray(p_index_gap_features_list, dtype=np.float32),
         "target": np.asarray(targets, dtype=target_dtype),
         "sample_dates": np.asarray(sample_dates, dtype="datetime64[D]"),
         "feature_names": input_feature_names,
@@ -387,6 +420,8 @@ def build_multi_company_dataset(
     return_normalizer: bool = False,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
+    p_index_mode: str = "gap_gate",
+    p_index_gap_threshold: float = 0.02,
 ) -> CrossMarketDataset | tuple[CrossMarketDataset, FeatureNormalizer | None]:
     x_hk_parts = []
     x_us_parts = []
@@ -394,11 +429,13 @@ def build_multi_company_dataset(
     session_parts = []
     us_sessions_parts = []
     latest_us_gap_parts = []
+    p_index_gap_parts = []
     target_parts = []
     hk_time_delta_parts = []
     us_time_delta_parts = []
 
     _validate_normalization_mode(normalization_mode)
+    _validate_p_index_mode(p_index_mode)
     if normalizer is not None and fit_normalizer:
         raise ValueError("Provide either normalizer or fit_normalizer=True, not both.")
     if normalization_mode != "train" and (normalizer is not None or fit_normalizer):
@@ -415,6 +452,8 @@ def build_multi_company_dataset(
         use_us_prev_night=use_us_prev_night,
         normalization_mode=normalization_mode,
         rolling_normalization_window=rolling_normalization_window,
+        p_index_mode=p_index_mode,
+        p_index_gap_threshold=p_index_gap_threshold,
     )
     fitted_normalizer = _fit_feature_normalizer(parts) if fit_normalizer else normalizer
     if fitted_normalizer is not None:
@@ -429,6 +468,7 @@ def build_multi_company_dataset(
         session_parts.append(samples["us_open_prev_night"])
         us_sessions_parts.append(samples["us_sessions_since_last_hk"])
         latest_us_gap_parts.append(samples["latest_us_gap_days"])
+        p_index_gap_parts.append(samples["p_index_gap_features"])
         target_parts.append(samples["target"])
 
     x_hk = np.concatenate(x_hk_parts, axis=0)
@@ -439,6 +479,7 @@ def build_multi_company_dataset(
     us_open_prev_night = np.concatenate(session_parts, axis=0)
     us_sessions_since_last_hk = np.concatenate(us_sessions_parts, axis=0)
     latest_us_gap_days = np.concatenate(latest_us_gap_parts, axis=0)
+    p_index_gap_features = np.concatenate(p_index_gap_parts, axis=0)
     target = np.concatenate(target_parts, axis=0)
 
     dataset = CrossMarketDataset(
@@ -450,6 +491,7 @@ def build_multi_company_dataset(
         us_open_prev_night=us_open_prev_night,
         us_sessions_since_last_hk=us_sessions_since_last_hk,
         latest_us_gap_days=latest_us_gap_days,
+        p_index_gap_features=p_index_gap_features,
         target=target,
     )
     if return_normalizer:
@@ -471,6 +513,8 @@ def build_multi_company_splits(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
+    p_index_mode: str = "gap_gate",
+    p_index_gap_threshold: float = 0.02,
     normalize_features: bool | None = None,
 ) -> tuple[CrossMarketDataset, CrossMarketDataset, CrossMarketDataset]:
     if not np.isclose(train_ratio + val_ratio + test_ratio, 1.0):
@@ -478,6 +522,7 @@ def build_multi_company_splits(
     if normalize_features is not None:
         normalization_mode = "train" if normalize_features else "none"
     _validate_normalization_mode(normalization_mode)
+    _validate_p_index_mode(p_index_mode)
 
     split_parts: dict[str, list[dict[str, np.ndarray]]] = {"train": [], "val": [], "test": []}
     array_keys = (
@@ -489,6 +534,7 @@ def build_multi_company_splits(
         "us_open_prev_night",
         "us_sessions_since_last_hk",
         "latest_us_gap_days",
+        "p_index_gap_features",
         "target",
     )
 
@@ -503,6 +549,8 @@ def build_multi_company_splits(
         use_us_prev_night=use_us_prev_night,
         normalization_mode=normalization_mode,
         rolling_normalization_window=rolling_normalization_window,
+        p_index_mode=p_index_mode,
+        p_index_gap_threshold=p_index_gap_threshold,
     ):
         total = len(samples["target"])
         train_end = int(total * train_ratio)
@@ -577,6 +625,8 @@ def _build_multi_company_parts(
     use_us_prev_night: bool,
     normalization_mode: str,
     rolling_normalization_window: int | None,
+    p_index_mode: str,
+    p_index_gap_threshold: float,
 ) -> list[dict[str, np.ndarray]]:
     parts = []
     for spec in company_specs:
@@ -594,6 +644,8 @@ def _build_multi_company_parts(
                 use_us_prev_night=use_us_prev_night,
                 normalization_mode=normalization_mode,
                 rolling_normalization_window=rolling_normalization_window,
+                p_index_mode=p_index_mode,
+                p_index_gap_threshold=p_index_gap_threshold,
             )
         )
     return parts
@@ -602,6 +654,27 @@ def _build_multi_company_parts(
 def _validate_normalization_mode(normalization_mode: str) -> None:
     if normalization_mode not in {"rolling", "train", "none"}:
         raise ValueError("normalization_mode must be one of: 'rolling', 'train', 'none'.")
+
+
+def _validate_p_index_mode(p_index_mode: str) -> None:
+    if p_index_mode not in P_INDEX_MODES:
+        raise ValueError("p_index_mode must be one of: 'feature', 'none', 'gap_gate'.")
+
+
+def _p_index_gap_features(
+    p_index_gap: float,
+    threshold: float,
+    mode: str,
+) -> np.ndarray:
+    if threshold < 0:
+        raise ValueError("p_index_gap_threshold must be non-negative.")
+    if mode != "gap_gate":
+        return np.zeros(3, dtype=np.float32)
+
+    positive_excess = max(p_index_gap - threshold, 0.0)
+    negative_excess = max(-p_index_gap - threshold, 0.0)
+    active = 1.0 if abs(p_index_gap) > threshold else 0.0
+    return np.asarray([positive_excess, negative_excess, active], dtype=np.float32)
 
 
 def _rolling_normalize_window(
