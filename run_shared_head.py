@@ -13,6 +13,7 @@ from cross_market_transformer import (
     build_multi_company_dataset,
     discover_cleaned_pairs,
     numpy_collate_fn,
+    retarget_regression_peak_trough_dataset,
 )
 from minimal_config import (
     DATASET_ROOT,
@@ -30,13 +31,18 @@ from minimal_config import (
 
 HELD_OUT_SHARED_HEAD_COMPANIES = {"zai_lab", "noah"}
 
+TASK_RUNS = [
+    ("r1", "regression"),
+    ("peak_trough", "peak_trough_classification"),
+]
 
-def _make_loader(dataset):
+
+def _make_loader(dataset, train_config):
     return DataLoader(
         dataset,
-        batch_size=TRAIN_CONFIG.batch_size,
+        batch_size=train_config.batch_size,
         shuffle=False,
-        num_workers=TRAIN_CONFIG.num_workers,
+        num_workers=train_config.num_workers,
         collate_fn=numpy_collate_fn,
     )
 
@@ -71,12 +77,12 @@ def split_company_specs(company_specs):
     return _reindex_company_specs(base_specs), _reindex_company_specs(held_out_specs)
 
 
-def make_dataloaders(base_specs, held_out_specs):
+def make_joint_datasets(base_specs, held_out_specs):
     train_set = build_multi_company_dataset(
         company_specs=base_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
-        task_type=MODEL_CONFIG.task_type,
+        task_type="regression_peak_trough",
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
@@ -89,7 +95,7 @@ def make_dataloaders(base_specs, held_out_specs):
         company_specs=held_out_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
-        task_type=MODEL_CONFIG.task_type,
+        task_type="regression_peak_trough",
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
@@ -98,10 +104,7 @@ def make_dataloaders(base_specs, held_out_specs):
         p_index_mode=P_INDEX_MODE,
         p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
-    return (
-        _make_loader(_with_shared_company_id(train_set)),
-        _make_loader(_with_shared_company_id(test_set)),
-    )
+    return _with_shared_company_id(train_set), _with_shared_company_id(test_set)
 
 
 def main() -> None:
@@ -115,7 +118,7 @@ def main() -> None:
             f"{sorted(HELD_OUT_SHARED_HEAD_COMPANIES)}"
         )
 
-    train_loader, test_loader = make_dataloaders(base_specs, held_out_specs)
+    joint_train_set, joint_test_set = make_joint_datasets(base_specs, held_out_specs)
 
     print("Training companies for shared-head model using cleaned inputs:")
     for spec in base_specs:
@@ -132,32 +135,54 @@ def main() -> None:
         )
     print()
 
-    model_config = replace(
-        deepcopy(MODEL_CONFIG),
-        num_companies=1,
-        hk_input_dim=train_loader.dataset.x_hk.shape[-1],
-        us_input_dim=train_loader.dataset.x_us.shape[-1],
-        p_index_gap_feature_dim=train_loader.dataset.p_index_gap_features.shape[-1],
-    )
-    train_config = deepcopy(TRAIN_CONFIG)
-    train_config.checkpoint_name = "cross_market_shared_head.pt"
-    train_config.history_plot_name = "cross_market_shared_head_history.png"
-    train_config.threshold_sweep_name = "cross_market_shared_head_threshold_sweep.csv"
-    train_config.threshold_sweep_plot_name = "cross_market_shared_head_threshold_sweep.png"
+    results = []
+    for task_name, task_type in TASK_RUNS:
+        print("=" * 100)
+        print(f"Running held-out shared-head task: {task_name} ({task_type})")
+        train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
+        test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
 
-    model = CrossMarketTransformerSharedHeadModel(model_config)
-    trainer = Trainer(
-        model=model,
-        train_config=train_config,
-        task_type=model_config.task_type,
-        num_classes=model_config.num_classes,
-    )
+        model_config = replace(
+            deepcopy(MODEL_CONFIG),
+            task_type=task_type,
+            num_classes=3,
+            num_companies=1,
+            hk_input_dim=train_set.x_hk.shape[-1],
+            us_input_dim=train_set.x_us.shape[-1],
+            p_index_gap_feature_dim=train_set.p_index_gap_features.shape[-1],
+        )
+        train_config = deepcopy(TRAIN_CONFIG)
+        train_config.checkpoint_name = f"cross_market_shared_head_{task_name}.pt"
+        train_config.history_plot_name = f"cross_market_shared_head_{task_name}_history.png"
+        train_config.threshold_sweep_name = f"cross_market_shared_head_{task_name}_threshold_sweep.csv"
+        train_config.threshold_sweep_plot_name = f"cross_market_shared_head_{task_name}_threshold_sweep.png"
+        train_config.save_threshold_sweep = task_type == "peak_trough_classification"
+        if task_type == "regression":
+            train_config.class_weight = None
 
-    fit_result = trainer.fit(train_loader, val_loader=None, test_loader=test_loader)
-    test_metrics = trainer.evaluate(test_loader)
+        train_loader = _make_loader(train_set, train_config)
+        test_loader = _make_loader(test_set, train_config)
 
-    print(f"Best {fit_result['best_score_name']}: {fit_result['best_score']:.6f}")
-    print(f"Test metrics: {test_metrics}")
+        torch.manual_seed(42)
+        model = CrossMarketTransformerSharedHeadModel(model_config)
+        trainer = Trainer(
+            model=model,
+            train_config=train_config,
+            task_type=model_config.task_type,
+            num_classes=model_config.num_classes,
+        )
+
+        fit_result = trainer.fit(train_loader, val_loader=None, test_loader=test_loader)
+        test_metrics = trainer.evaluate(test_loader)
+        results.append((task_name, fit_result["best_score_name"], fit_result["best_score"], test_metrics))
+
+        print(f"Best {fit_result['best_score_name']}: {fit_result['best_score']:.6f}")
+        print(f"Test metrics: {test_metrics}")
+
+    print("=" * 100)
+    print("Held-out shared-head summary")
+    for task_name, best_score_name, best_score, test_metrics in results:
+        print(f"{task_name:12s} | {best_score_name}={best_score:.6f} | test={test_metrics}")
 
 
 if __name__ == "__main__":

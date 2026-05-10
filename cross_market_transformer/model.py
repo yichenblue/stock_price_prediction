@@ -586,6 +586,10 @@ def _resolve_output_dim(task_type: str, num_classes: int) -> int:
         if num_classes != 3:
             raise ValueError("regression_peak_trough requires num_classes=3.")
         return 1 + num_classes
+    if task_type == "peak_trough_classification":
+        if num_classes != 3:
+            raise ValueError("peak_trough_classification requires num_classes=3.")
+        return num_classes
     if task_type == "binary_classification":
         return 1
     if task_type == "multiclass_classification":

@@ -13,6 +13,7 @@ from .data import (
     discover_standardized_pairs,
     load_factor_xlsx,
     numpy_collate_fn,
+    retarget_regression_peak_trough_dataset,
 )
 from .model import (
     CompanySpecificHeads,
@@ -58,4 +59,5 @@ __all__ = [
     "discover_standardized_pairs",
     "load_factor_xlsx",
     "numpy_collate_fn",
+    "retarget_regression_peak_trough_dataset",
 ]

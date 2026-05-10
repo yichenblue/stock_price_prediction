@@ -18,6 +18,7 @@ OFFICE_DOC_REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relat
 LABEL_COLUMNS = {"target_peak"}
 P_INDEX_COLUMNS = {"P_index"}
 P_INDEX_MODES = {"feature", "none", "gap_gate", "feature_plus_gap"}
+PEAK_TROUGH_TASK_TYPE = "peak_trough_classification"
 
 
 @dataclass
@@ -254,7 +255,7 @@ def build_samples_from_excel_pair(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "feature_plus_gap",
+    p_index_mode: str = "feature",
     p_index_gap_threshold: float = 0.02,
 ) -> dict[str, np.ndarray]:
     """
@@ -285,12 +286,12 @@ def build_samples_from_excel_pair(
         raise ValueError("P-index mode requires a 'P_index' column.")
     p_index_idx = hk_feature_names.index("P_index")
     target_peak_idx = None
-    if task_type == "regression_peak_trough":
+    if task_type in {"regression_peak_trough", PEAK_TROUGH_TASK_TYPE}:
         if "target_peak" not in hk_feature_names:
-            raise ValueError("task_type='regression_peak_trough' requires a 'target_peak' column.")
+            raise ValueError(f"task_type='{task_type}' requires a 'target_peak' column.")
         target_peak_idx = hk_feature_names.index("target_peak")
         if multiclass_num_classes != 3:
-            raise ValueError("regression_peak_trough requires multiclass_num_classes=3.")
+            raise ValueError(f"{task_type} requires multiclass_num_classes=3.")
     excluded_columns = set(LABEL_COLUMNS)
     if p_index_mode in {"none", "gap_gate"}:
         excluded_columns.update(P_INDEX_COLUMNS)
@@ -420,7 +421,7 @@ def build_multi_company_dataset(
     return_normalizer: bool = False,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "feature_plus_gap",
+    p_index_mode: str = "feature",
     p_index_gap_threshold: float = 0.02,
 ) -> CrossMarketDataset | tuple[CrossMarketDataset, FeatureNormalizer | None]:
     x_hk_parts = []
@@ -513,7 +514,7 @@ def build_multi_company_splits(
     use_us_prev_night: bool = True,
     normalization_mode: str = "rolling",
     rolling_normalization_window: int | None = 252,
-    p_index_mode: str = "feature_plus_gap",
+    p_index_mode: str = "feature",
     p_index_gap_threshold: float = 0.02,
     normalize_features: bool | None = None,
 ) -> tuple[CrossMarketDataset, CrossMarketDataset, CrossMarketDataset]:
@@ -759,6 +760,43 @@ def _concat_dataset_parts(parts: Sequence[dict[str, np.ndarray]]) -> CrossMarket
     return CrossMarketDataset(**merged)
 
 
+def retarget_regression_peak_trough_dataset(
+    dataset: CrossMarketDataset,
+    task_type: str,
+) -> CrossMarketDataset:
+    """Reuse a joint [r1, target_peak] dataset for one single-task objective."""
+    target = dataset.target
+    if target.ndim != 2 or target.shape[1] != 2:
+        raise ValueError("Expected a regression_peak_trough dataset with target shape [num_samples, 2].")
+
+    if task_type == "regression":
+        new_target = target[:, 0].float()
+    elif task_type == PEAK_TROUGH_TASK_TYPE:
+        new_target = target[:, 1].long()
+    elif task_type == "regression_peak_trough":
+        new_target = target
+    else:
+        raise ValueError(
+            "retarget_regression_peak_trough_dataset supports only "
+            "'regression', 'peak_trough_classification', and 'regression_peak_trough'."
+        )
+
+    return CrossMarketDataset(
+        x_hk=dataset.x_hk,
+        x_us=dataset.x_us,
+        hk_time_delta=dataset.hk_time_delta,
+        us_time_delta=dataset.us_time_delta,
+        company_id=dataset.company_id,
+        us_open_prev_night=dataset.us_open_prev_night,
+        us_sessions_since_last_hk=dataset.us_sessions_since_last_hk,
+        latest_us_gap_days=dataset.latest_us_gap_days,
+        p_index_gap_features=dataset.p_index_gap_features,
+        target=new_target,
+        hk_padding_mask=dataset.hk_padding_mask,
+        us_padding_mask=dataset.us_padding_mask,
+    )
+
+
 def _build_target(
     target_value: float,
     target_peak_value: float | None,
@@ -772,6 +810,10 @@ def _build_target(
         if target_peak_value is None:
             raise ValueError("target_peak_value is required for regression_peak_trough.")
         return np.asarray([target_value, target_peak_value], dtype=np.float32)
+    if task_type == PEAK_TROUGH_TASK_TYPE:
+        if target_peak_value is None:
+            raise ValueError("target_peak_value is required for peak_trough_classification.")
+        return int(target_peak_value)
     if task_type == "binary_classification":
         return 1.0 if target_value > 0.0 else 0.0
     if task_type == "multiclass_classification":

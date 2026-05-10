@@ -47,7 +47,11 @@ Notes:
 - Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Cleaned.xlsx` inputs.
 - Multi-company train/val/test splitting is done per company first, then merged across companies.
 - The default training entrypoint uses a shared prediction head on top of the cross-market backbone.
-- Company-specific heads are still available for ablation through `CrossMarketTransformerModel`.
+- The default main setting trains two separate models with the same shared-head cross-market architecture:
+  - `r1`: predicts raw HK next-day `r1`; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
+  - `peak_trough`: predicts `target_peak` as a three-class probability distribution `[trough, neutral, peak]`.
+- The default main model uses `P_index` as a normal HK/US sequence feature.
+- Company-specific heads are still available in `CrossMarketTransformerModel`.
 - Padding masks are supported for future variable-length sequence handling.
 - The default normalization mode is leak-free rolling normalization:
   - `NORMALIZATION_MODE="rolling"`
@@ -56,21 +60,18 @@ Notes:
   - US input windows are normalized with US history available up to the latest usable US session
 - The Excel loader supports your current files such as `09988.HK_Cleaned.xlsx` and `BABA_Cleaned.xlsx`.
 - The trainer now prints one log line per epoch and saves a train-vs-val plot if `matplotlib` is installed.
-- The current default task is `regression_peak_trough`:
-  - inputs exclude `target_peak` to avoid target leakage
-  - target is `[r1, target_peak]`
-  - model output is `[r1_pred, trough_logit, neutral_logit, peak_logit]`
-  - `softmax(output[:, 1:4])` gives `[trough_prob, neutral_prob, peak_prob]`
-  - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak
+- `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak.
+- `regression_peak_trough` is retained as a joint-target data format for compatibility, but the main scripts now retarget it into two independent single-task datasets before training.
 - `P_index` is configurable through `P_INDEX_MODE`:
   - `feature`: use `P_index` as a normal HK/US sequence feature
   - `none`: remove `P_index` entirely
   - `gap_gate`: remove `P_index` from HK/US sequence features, compute `HK P_index(t-1) - US P_index(latest usable US session)`, and inject thresholded discrepancy features into the pre-open query
   - `feature_plus_gap`: use `P_index` as a normal HK/US sequence feature, and also inject `[HK latest P_index, US latest P_index, gap, abs(gap)]` into the pre-open query
-  - The default is `feature_plus_gap`, so the default HK/US input dimension includes `P_index`.
+  - The default is `feature`, so the default HK/US input dimension includes `P_index`.
   - HK-only baselines accept the batch field but do not use auxiliary cross-market P-index features, so they remain HK-only.
 - Other supported targets:
-  - `regression_peak_trough`: predict HK `r1` and peak/trough class jointly
+  - `regression_peak_trough`: legacy joint model that predicts HK `r1` and peak/trough class together
+  - `peak_trough_classification`: predict `target_peak` only as `[trough, neutral, peak]`
   - `regression`: predict raw `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
   - `binary_classification`: predict whether `r1 > 0`
   - `multiclass_classification`: discretize `r1` with configured thresholds
@@ -84,16 +85,17 @@ Notes:
   - the most recent completed US session is excluded
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
-- `run_ablation.py` compares three standard settings with the same data split and trainer:
+- `run_ablation.py` compares two structural ablations. Each ablation trains one `r1` model and one `peak_trough` model:
   - `hk_us_concat`
   - `hk_transformer_only`
-  - `cross_market_transformer`
 - `run_p_index_ablation.py` compares:
   - A. `P_index` as a normal feature
   - B. no `P_index`
   - C. `P_index` as a normal feature plus soft discrepancy features
+  - Each P-index variant trains one `r1` model and one `peak_trough` model with the shared-head cross-market architecture.
 - `run_shared_head.py` runs the shared-head generalization experiment:
   - all legacy-company samples are used for training
   - no validation split is used
   - `zai_lab` plus `noah` are used only as the held-out test set
+  - one `r1` model and one `peak_trough` model are trained separately
 - Paths are local by default and can be redirected in Colab by setting `PROJECT_ROOT`.

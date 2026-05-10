@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from .config import TrainConfig
 from .data import SampleBatch
 
+PEAK_TROUGH_TASK_TYPES = {"regression_peak_trough", "peak_trough_classification"}
+
 
 @dataclass
 class EpochResult:
@@ -122,7 +124,7 @@ class Trainer:
         if self.train_config.plot_history:
             self._save_history_plot(history, self.train_config.history_plot_path())
         self.load_checkpoint(checkpoint_path)
-        if self.train_config.save_threshold_sweep and self.task_type == "regression_peak_trough":
+        if self.train_config.save_threshold_sweep and self.task_type in PEAK_TROUGH_TASK_TYPES:
             sweep_loaders = {"train": train_loader}
             if val_loader is not None:
                 sweep_loaders["val"] = val_loader
@@ -163,16 +165,17 @@ class Trainer:
 
     def predict_peak_trough_probabilities(self, data_loader: DataLoader) -> dict[str, torch.Tensor]:
         raw = self.predict(data_loader)
-        if self.task_type != "regression_peak_trough":
-            raise ValueError("predict_peak_trough_probabilities requires task_type='regression_peak_trough'.")
-        probs = torch.softmax(raw[:, 1:4], dim=-1)
-        return {
-            "r1_pred": raw[:, 0],
+        logits = self._peak_trough_logits_from_raw(raw)
+        probs = torch.softmax(logits, dim=-1)
+        result = {
             "trough_prob": probs[:, 0],
             "neutral_prob": probs[:, 1],
             "peak_prob": probs[:, 2],
             "peak_trough_probs": probs,
         }
+        if self.task_type == "regression_peak_trough":
+            result["r1_pred"] = raw[:, 0]
+        return result
 
     def save_threshold_sweep(
         self,
@@ -180,16 +183,19 @@ class Trainer:
         path: str | Path,
         plot_path: str | Path | None = None,
     ) -> None:
-        if self.task_type != "regression_peak_trough":
-            raise ValueError("save_threshold_sweep requires task_type='regression_peak_trough'.")
+        if self.task_type not in PEAK_TROUGH_TASK_TYPES:
+            raise ValueError(
+                "save_threshold_sweep requires task_type='regression_peak_trough' "
+                "or 'peak_trough_classification'."
+            )
 
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         rows = []
         for split_name, data_loader in data_loaders.items():
             raw_preds, targets = self._collect_predictions_and_targets(data_loader)
-            probs = torch.softmax(raw_preds[:, 1:4], dim=-1)
-            labels = targets[:, 1].long()
+            logits, labels = self._peak_trough_logits_and_labels(raw_preds, targets)
+            probs = torch.softmax(logits, dim=-1)
             for threshold in self.train_config.threshold_sweep_values:
                 rows.append(
                     _threshold_sweep_row(
@@ -246,6 +252,30 @@ class Trainer:
                 predictions.append(logits.detach().cpu())
                 targets.append(batch.target.detach().cpu())
         return torch.cat(predictions, dim=0), torch.cat(targets, dim=0)
+
+    def _peak_trough_logits_from_raw(self, raw_preds: torch.Tensor) -> torch.Tensor:
+        if self.task_type == "regression_peak_trough":
+            return raw_preds[:, 1:4].float()
+        if self.task_type == "peak_trough_classification":
+            return raw_preds[:, :3].float()
+        raise ValueError(
+            "Peak/trough probabilities require task_type='regression_peak_trough' "
+            "or 'peak_trough_classification'."
+        )
+
+    def _peak_trough_logits_and_labels(
+        self,
+        raw_preds: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        logits = self._peak_trough_logits_from_raw(raw_preds)
+        if self.task_type == "regression_peak_trough":
+            labels = targets[:, 1].long()
+        elif self.task_type == "peak_trough_classification":
+            labels = targets.long().view(-1)
+        else:
+            raise ValueError(f"Unsupported peak/trough task_type: {self.task_type}")
+        return logits, labels
 
     def _run_epoch(self, data_loader: DataLoader, training: bool) -> EpochResult:
         self.model.train(training)
@@ -305,9 +335,11 @@ class Trainer:
                 neg_w, pos_w = self.train_config.class_weight
                 pos_weight = torch.tensor([pos_w / max(neg_w, 1e-12)], dtype=torch.float32, device=self.device)
             return nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-        if self.task_type == "multiclass_classification":
+        if self.task_type in {"multiclass_classification", "peak_trough_classification"}:
             weight = None
             if self.train_config.class_weight is not None:
+                if len(self.train_config.class_weight) != self.num_classes:
+                    raise ValueError(f"{self.task_type} class_weight must contain exactly {self.num_classes} values.")
                 weight = torch.tensor(self.train_config.class_weight, dtype=torch.float32, device=self.device)
             return nn.CrossEntropyLoss(weight=weight)
         raise ValueError(f"Unsupported task_type: {self.task_type}")
@@ -414,6 +446,38 @@ class Trainer:
                 "r1_mae": r1_mae,
                 "r1_ic": r1_ic,
                 "r1_sign_accuracy": r1_sign_accuracy,
+                **class_metrics,
+                **threshold_metrics,
+            }
+
+        if self.task_type == "peak_trough_classification":
+            peak_trough_logits, peak_trough_target = self._peak_trough_logits_and_labels(preds, target)
+            peak_trough_labels = torch.argmax(peak_trough_logits, dim=-1)
+            class_metrics = _classification_metrics(
+                peak_trough_labels,
+                peak_trough_target,
+                num_classes=3,
+                class_names=("trough", "neutral", "peak"),
+            )
+            peak_trough_probs = torch.softmax(peak_trough_logits, dim=-1)
+            threshold_metrics = {}
+            threshold_metrics.update(
+                _binary_event_metrics(
+                    scores=peak_trough_probs[:, 2],
+                    target=peak_trough_target == 2,
+                    threshold=0.5,
+                    prefix="peak_thr50",
+                )
+            )
+            threshold_metrics.update(
+                _binary_event_metrics(
+                    scores=peak_trough_probs[:, 0],
+                    target=peak_trough_target == 0,
+                    threshold=0.5,
+                    prefix="trough_thr50",
+                )
+            )
+            return {
                 **class_metrics,
                 **threshold_metrics,
             }
@@ -591,6 +655,12 @@ class Trainer:
                 "trough_f1",
                 "loss",
             ):
+                if metric_name in history_entry:
+                    names.append(metric_name)
+            return names
+        if self.task_type == "peak_trough_classification":
+            names = []
+            for metric_name in ("accuracy", "peak_f1", "trough_f1", "loss"):
                 if metric_name in history_entry:
                     names.append(metric_name)
             return names
