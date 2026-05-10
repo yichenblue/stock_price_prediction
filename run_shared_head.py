@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import replace
-
 import torch
 from torch.utils.data import DataLoader
 
@@ -24,9 +21,10 @@ from minimal_config import (
     P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
-    TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
+    make_task_model_config,
+    make_task_train_config,
 )
 
 HELD_OUT_SHARED_HEAD_COMPANIES = {"zai_lab", "noah"}
@@ -142,23 +140,19 @@ def main() -> None:
         train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
         test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
 
-        model_config = replace(
-            deepcopy(MODEL_CONFIG),
-            task_type=task_type,
+        model_config = make_task_model_config(
+            task_type,
             num_classes=3,
             num_companies=1,
             hk_input_dim=train_set.x_hk.shape[-1],
             us_input_dim=train_set.x_us.shape[-1],
             p_index_gap_feature_dim=train_set.p_index_gap_features.shape[-1],
         )
-        train_config = deepcopy(TRAIN_CONFIG)
+        train_config = make_task_train_config(task_type)
         train_config.checkpoint_name = f"cross_market_shared_head_{task_name}.pt"
         train_config.history_plot_name = f"cross_market_shared_head_{task_name}_history.png"
         train_config.threshold_sweep_name = f"cross_market_shared_head_{task_name}_threshold_sweep.csv"
         train_config.threshold_sweep_plot_name = f"cross_market_shared_head_{task_name}_threshold_sweep.png"
-        train_config.save_threshold_sweep = task_type == "peak_trough_classification"
-        if task_type == "regression":
-            train_config.class_weight = None
 
         train_loader = _make_loader(train_set, train_config)
         test_loader = _make_loader(test_set, train_config)

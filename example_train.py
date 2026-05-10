@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import replace
-
 import torch
 from torch.utils.data import DataLoader
 
@@ -23,9 +20,10 @@ from minimal_config import (
     P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
-    TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
+    make_task_model_config,
+    make_task_train_config,
 )
 
 TASK_RUNS = [
@@ -45,14 +43,11 @@ def _make_loader(dataset, train_config):
 
 
 def _configure_train(task_name: str, task_type: str):
-    train_config = deepcopy(TRAIN_CONFIG)
+    train_config = make_task_train_config(task_type)
     train_config.checkpoint_name = f"cross_market_shared_head_pindex_feature_{task_name}.pt"
     train_config.history_plot_name = f"cross_market_shared_head_pindex_feature_{task_name}_history.png"
     train_config.threshold_sweep_name = f"cross_market_shared_head_pindex_feature_{task_name}_threshold_sweep.csv"
     train_config.threshold_sweep_plot_name = f"cross_market_shared_head_pindex_feature_{task_name}_threshold_sweep.png"
-    train_config.save_threshold_sweep = task_type == "peak_trough_classification"
-    if task_type == "regression":
-        train_config.class_weight = None
     return train_config
 
 
@@ -73,9 +68,8 @@ def _run_task(
     val_loader = _make_loader(val_set, train_config)
     test_loader = _make_loader(test_set, train_config)
 
-    model_config = replace(
-        MODEL_CONFIG,
-        task_type=task_type,
+    model_config = make_task_model_config(
+        task_type,
         num_classes=3,
         num_companies=num_companies,
         hk_input_dim=train_set.x_hk.shape[-1],

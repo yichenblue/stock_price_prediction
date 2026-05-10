@@ -50,6 +50,9 @@ Notes:
 - The default main setting trains two separate models with the same shared-head cross-market architecture:
   - `r1`: predicts raw HK next-day `r1`; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
   - `peak_trough`: predicts `target_peak` as a three-class probability distribution `[trough, neutral, peak]`.
+- The two default tasks use separate training hyperparameters:
+  - `r1`: `num_epochs=60`, `learning_rate=1e-4`, `weight_decay=7e-4`, `dropout=0.3`
+  - `peak_trough`: `num_epochs=30`, `learning_rate=5e-5`, `weight_decay=1e-3`, `dropout=0.35`, `class_weight=[4.0, 1.0, 4.0]`
 - The default main model uses `P_index` as a normal HK/US sequence feature.
 - Company-specific heads are still available in `CrossMarketTransformerModel`.
 - Padding masks are supported for future variable-length sequence handling.
@@ -86,6 +89,7 @@ Notes:
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
 - `run_ablation.py` compares two structural ablations. Each ablation trains one `r1` model and one `peak_trough` model:
+  - `random_walk`: non-trained baseline; predicts zero next-day return and neutral peak/trough state
   - `hk_us_concat`
   - `hk_transformer_only`
 - `run_p_index_ablation.py` compares:

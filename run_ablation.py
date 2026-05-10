@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-from copy import deepcopy
-from dataclasses import replace
-
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
@@ -24,9 +22,15 @@ from minimal_config import (
     P_INDEX_MODE,
     ROLLING_NORMALIZATION_WINDOW,
     TARGET_COL,
-    TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
+    make_task_model_config,
+    make_task_train_config,
+)
+from cross_market_transformer.trainer import (
+    _binary_event_metrics,
+    _classification_metrics,
+    _information_coefficient,
 )
 
 TASK_RUNS = [
@@ -72,6 +76,84 @@ def build_experiments():
     ]
 
 
+def _random_walk_regression_metrics(dataset) -> dict[str, float]:
+    target = dataset.target.float().view(-1)
+    preds = torch.zeros_like(target)
+    mse = torch.mean((preds - target) ** 2).item()
+    mae = torch.mean(torch.abs(preds - target)).item()
+    return {
+        "loss": mse,
+        "mse": mse,
+        "rmse": mse ** 0.5,
+        "mae": mae,
+        "ic": _information_coefficient(preds, target),
+        "sign_accuracy": ((preds >= 0) == (target >= 0)).float().mean().item(),
+    }
+
+
+def _random_walk_peak_trough_metrics(dataset) -> dict[str, float]:
+    target = dataset.target.long().view(-1)
+    logits = torch.zeros((target.numel(), 3), dtype=torch.float32)
+    logits[:, 1] = 1.0  # Random walk expected-return view maps to a neutral state.
+
+    weight = None
+    peak_train_config = make_task_train_config("peak_trough_classification")
+    if peak_train_config.class_weight is not None:
+        weight = torch.tensor(peak_train_config.class_weight, dtype=torch.float32)
+    loss = F.cross_entropy(logits, target, weight=weight).item()
+
+    labels = torch.argmax(logits, dim=-1)
+    metrics = _classification_metrics(
+        labels,
+        target,
+        num_classes=3,
+        class_names=("trough", "neutral", "peak"),
+    )
+    probs = torch.softmax(logits, dim=-1)
+    metrics.update(
+        _binary_event_metrics(
+            scores=probs[:, 2],
+            target=target == 2,
+            threshold=0.5,
+            prefix="peak_thr50",
+        )
+    )
+    metrics.update(
+        _binary_event_metrics(
+            scores=probs[:, 0],
+            target=target == 0,
+            threshold=0.5,
+            prefix="trough_thr50",
+        )
+    )
+    return {"loss": loss, **metrics}
+
+
+def evaluate_random_walk_baseline(joint_train_set, joint_val_set, joint_test_set):
+    results = []
+    evaluators = {
+        "regression": _random_walk_regression_metrics,
+        "peak_trough_classification": _random_walk_peak_trough_metrics,
+    }
+    for task_name, task_type in TASK_RUNS:
+        run_name = f"random_walk_{task_name}"
+        print("=" * 100)
+        print(f"Running baseline: {run_name} ({task_type})")
+        train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
+        val_set = retarget_regression_peak_trough_dataset(joint_val_set, task_type)
+        test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
+        evaluate = evaluators[task_type]
+        train_metrics = evaluate(train_set)
+        val_metrics = evaluate(val_set)
+        test_metrics = evaluate(test_set)
+
+        print(f"Train metrics: {train_metrics}")
+        print(f"Val metrics: {val_metrics}")
+        print(f"Test metrics: {test_metrics}")
+        results.append((run_name, "val_loss", val_metrics["loss"], test_metrics))
+    return results
+
+
 def main() -> None:
     torch.manual_seed(42)
     company_specs = discover_cleaned_pairs(DATASET_ROOT)
@@ -88,7 +170,7 @@ def main() -> None:
         )
     print()
 
-    results = []
+    results = evaluate_random_walk_baseline(joint_train_set, joint_val_set, joint_test_set)
     for exp_name, model_cls in build_experiments():
         for task_name, task_type in TASK_RUNS:
             run_name = f"{exp_name}_{task_name}"
@@ -98,22 +180,18 @@ def main() -> None:
             train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
             val_set = retarget_regression_peak_trough_dataset(joint_val_set, task_type)
             test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
-            train_config = deepcopy(TRAIN_CONFIG)
+            train_config = make_task_train_config(task_type)
             train_config.checkpoint_name = f"{run_name}.pt"
             train_config.history_plot_name = f"{run_name}_history.png"
             train_config.threshold_sweep_name = f"{run_name}_threshold_sweep.csv"
             train_config.threshold_sweep_plot_name = f"{run_name}_threshold_sweep.png"
-            train_config.save_threshold_sweep = task_type == "peak_trough_classification"
-            if task_type == "regression":
-                train_config.class_weight = None
 
             train_loader = _make_loader(train_set, train_config)
             val_loader = _make_loader(val_set, train_config)
             test_loader = _make_loader(test_set, train_config)
 
-            model_config = replace(
-                deepcopy(MODEL_CONFIG),
-                task_type=task_type,
+            model_config = make_task_model_config(
+                task_type,
                 num_classes=3,
                 num_companies=len(company_specs),
                 hk_input_dim=hk_input_dim,

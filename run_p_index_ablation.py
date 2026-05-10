@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import csv
-from copy import deepcopy
-from dataclasses import replace
 from pathlib import Path
 
 import torch
@@ -27,6 +25,8 @@ from minimal_config import (
     TRAIN_CONFIG,
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
+    make_task_model_config,
+    make_task_train_config,
 )
 
 TASK_RUNS = [
@@ -135,23 +135,19 @@ def main() -> None:
             train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
             val_set = retarget_regression_peak_trough_dataset(joint_val_set, task_type)
             test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
-            train_config = deepcopy(TRAIN_CONFIG)
+            train_config = make_task_train_config(task_type)
             train_config.checkpoint_name = f"{run_name}.pt"
             train_config.history_plot_name = f"{run_name}_history.png"
             train_config.threshold_sweep_name = f"{run_name}_threshold_sweep.csv"
             train_config.threshold_sweep_plot_name = f"{run_name}_threshold_sweep.png"
-            train_config.save_threshold_sweep = task_type == "peak_trough_classification"
-            if task_type == "regression":
-                train_config.class_weight = None
 
             train_loader = _make_loader(train_set, train_config)
             val_loader = _make_loader(val_set, train_config)
             test_loader = _make_loader(test_set, train_config)
 
             torch.manual_seed(42)
-            model_config = replace(
-                deepcopy(MODEL_CONFIG),
-                task_type=task_type,
+            model_config = make_task_model_config(
+                task_type,
                 num_classes=3,
                 num_companies=len(company_specs),
                 hk_input_dim=hk_input_dim,
