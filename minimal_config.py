@@ -78,9 +78,9 @@ def make_task_train_config(task_type: str) -> TrainConfig:
         train_config.class_weight = None
         train_config.save_threshold_sweep = False
     elif task_type == PEAK_TROUGH_TASK_TYPE:
-        train_config.num_epochs = 30
+        train_config.num_epochs = 35
         train_config.learning_rate = 5e-5
         train_config.weight_decay = 1e-3
-        train_config.class_weight = [4.0, 1.0, 4.0]
+        train_config.class_weight = [6.0, 1.0, 5.0]
         train_config.save_threshold_sweep = True
     return train_config
