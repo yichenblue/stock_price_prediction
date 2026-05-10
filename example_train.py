@@ -6,7 +6,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
-    CrossMarketTransformerModel,
+    CrossMarketTransformerSharedHeadModel,
     Trainer,
     build_multi_company_splits,
     discover_cleaned_pairs,
@@ -85,7 +85,7 @@ def main() -> None:
         collate_fn=numpy_collate_fn,
     )
 
-    model = CrossMarketTransformerModel(model_config)
+    model = CrossMarketTransformerSharedHeadModel(model_config)
     trainer = Trainer(
         model=model,
         train_config=train_config,

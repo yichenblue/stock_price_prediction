@@ -22,7 +22,7 @@ Modules:
 Minimal usage:
 
 ```python
-from cross_market_transformer import CrossMarketDataset, CrossMarketTransformerModel
+from cross_market_transformer import CrossMarketDataset, CrossMarketTransformerSharedHeadModel
 from cross_market_transformer import ModelConfig, TrainConfig, Trainer
 ```
 
@@ -46,7 +46,8 @@ Notes:
 - Splits are chronological only through `chronological_split`.
 - Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Cleaned.xlsx` inputs.
 - Multi-company train/val/test splitting is done per company first, then merged across companies.
-- Company-specific prediction heads sit on top of a shared backbone.
+- The default training entrypoint uses a shared prediction head on top of the cross-market backbone.
+- Company-specific heads are still available for ablation through `CrossMarketTransformerModel`.
 - Padding masks are supported for future variable-length sequence handling.
 - The default normalization mode is leak-free rolling normalization:
   - `NORMALIZATION_MODE="rolling"`
