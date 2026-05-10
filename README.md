@@ -90,7 +90,7 @@ Notes:
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
 - `run_ablation.py` compares two structural ablations. Each ablation trains one `r1` model and one `peak_trough` model:
   - `random_walk`: non-trained baseline; predicts zero next-day return and neutral peak/trough state
-  - `hk_us_concat`
+  - `hk_us_concat`: main-style HK/US Transformer encoders plus shared head, but no cross-attention; the pre-open query attends over concatenated HK/US tokens
   - `hk_transformer_only`
 - `run_p_index_ablation.py` compares:
   - A. `P_index` as a normal feature

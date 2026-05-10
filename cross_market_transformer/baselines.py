@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 from .config import ModelConfig
-from .model import CompanySpecificHeads, PIndexGapEncoder
+from .model import CompanySpecificHeads, HKEncoder, PreOpenAggregator, SharedHead, USEncoder
 
 
 def _resolve_output_dim(task_type: str, num_classes: int) -> int:
@@ -89,40 +89,45 @@ class HKOnlyBaseline(nn.Module):
 class HKUSConcatBaseline(nn.Module):
     """
     Baseline 2:
-    Pool HK and US histories independently, concatenate them, then predict.
+    Keep the main HK/US Transformer encoders and shared head, but remove
+    cross-market attention. The pre-open query attends over concatenated
+    HK and US encoded tokens directly.
     """
 
     def __init__(self, config: ModelConfig) -> None:
         super().__init__()
         self.config = config
         output_dim = _resolve_output_dim(config.task_type, config.num_classes)
-        self.hk_projection = nn.Sequential(
-            nn.Linear(config.hk_input_dim, config.d_model),
-            nn.GELU(),
-            nn.Dropout(config.dropout),
+        self.hk_encoder = HKEncoder(
+            input_dim=config.hk_input_dim,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            num_layers=config.num_layers_hk,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            max_len=config.max_hk_len,
+            layer_norm_eps=config.layer_norm_eps,
         )
-        self.us_projection = nn.Sequential(
-            nn.Linear(config.us_input_dim, config.d_model),
-            nn.GELU(),
-            nn.Dropout(config.dropout),
+        self.us_encoder = USEncoder(
+            input_dim=config.us_input_dim,
+            d_model=config.d_model,
+            n_heads=config.n_heads,
+            num_layers=config.num_layers_us,
+            dim_feedforward=config.dim_feedforward,
+            dropout=config.dropout,
+            max_len=config.max_us_len,
+            layer_norm_eps=config.layer_norm_eps,
         )
-        self.session_embedding = nn.Embedding(2, config.d_model)
-        self.p_index_gap_encoder = (
-            PIndexGapEncoder(
-                input_dim=config.p_index_gap_feature_dim,
-                d_model=config.d_model,
-                dropout=config.dropout,
-            )
-            if _uses_p_index_gap_gate(config)
-            else None
-        )
-        self.fusion = nn.Sequential(
-            nn.Linear(config.d_model * 2, config.d_model),
-            nn.GELU(),
-            nn.Dropout(config.dropout),
-        )
-        self.company_heads = CompanySpecificHeads(
+        self.pre_open_aggregator = PreOpenAggregator(
+            d_model=config.d_model,
+            n_heads=config.n_heads,
             num_companies=config.num_companies,
+            dropout=config.dropout,
+            layer_norm_eps=config.layer_norm_eps,
+            use_p_index_gap_gate=_uses_p_index_gap_gate(config),
+            p_index_gap_feature_dim=config.p_index_gap_feature_dim,
+        )
+        self.shared_head = SharedHead(
             input_dim=config.d_model,
             hidden_dim=config.head_hidden_dim,
             output_dim=output_dim,
@@ -143,18 +148,26 @@ class HKUSConcatBaseline(nn.Module):
         hk_padding_mask: torch.Tensor | None = None,
         us_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        del hk_time_delta, us_time_delta, us_sessions_since_last_hk, latest_us_gap_days
-        hk_hidden = self.hk_projection(x_hk)  # [batch, hk_len, d_model]
-        us_hidden = self.us_projection(x_us)  # [batch, us_len, d_model]
-        hk_z = masked_mean_pool(hk_hidden, hk_padding_mask)
-        us_z = masked_mean_pool(us_hidden, us_padding_mask)
-        z = self.fusion(torch.cat([hk_z, us_z], dim=-1))
-        z = z + self.session_embedding(us_open_prev_night)
-        if self.p_index_gap_encoder is not None:
-            if p_index_gap_features is None:
-                raise ValueError("p_index_gap_features is required when p_index_mode uses auxiliary P-index features.")
-            z = z + self.p_index_gap_encoder(p_index_gap_features)
-        logits = self.company_heads(z, company_id)
+        hk_encoded = self.hk_encoder(x_hk, time_delta=hk_time_delta, padding_mask=hk_padding_mask)
+        us_encoded = self.us_encoder(x_us, time_delta=us_time_delta, padding_mask=us_padding_mask)
+        encoded = torch.cat([hk_encoded, us_encoded], dim=1)  # [batch, hk_len + us_len, d_model]
+        padding_mask = _concat_padding_masks(
+            hk_padding_mask,
+            us_padding_mask,
+            hk_len=hk_encoded.size(1),
+            us_len=us_encoded.size(1),
+            device=encoded.device,
+        )
+        z = self.pre_open_aggregator(
+            fused_hk=encoded,
+            company_id=company_id,
+            us_open_prev_night=us_open_prev_night,
+            us_sessions_since_last_hk=us_sessions_since_last_hk,
+            latest_us_gap_days=latest_us_gap_days,
+            p_index_gap_features=p_index_gap_features,
+            hk_padding_mask=padding_mask,
+        )
+        logits = self.shared_head(z)
         if self.config.task_type == "regression":
             return logits.squeeze(-1)
         return logits
@@ -164,3 +177,21 @@ def _uses_p_index_gap_gate(config: ModelConfig) -> bool:
     if config.p_index_mode not in {"feature", "none", "gap_gate", "feature_plus_gap"}:
         raise ValueError("config.p_index_mode must be one of: 'feature', 'none', 'gap_gate', 'feature_plus_gap'.")
     return config.p_index_mode in {"gap_gate", "feature_plus_gap"}
+
+
+def _concat_padding_masks(
+    hk_padding_mask: torch.Tensor | None,
+    us_padding_mask: torch.Tensor | None,
+    hk_len: int,
+    us_len: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    if hk_padding_mask is None and us_padding_mask is None:
+        return None
+    if hk_padding_mask is None:
+        batch_size = us_padding_mask.size(0)
+        hk_padding_mask = torch.zeros(batch_size, hk_len, dtype=torch.bool, device=device)
+    if us_padding_mask is None:
+        batch_size = hk_padding_mask.size(0)
+        us_padding_mask = torch.zeros(batch_size, us_len, dtype=torch.bool, device=device)
+    return torch.cat([hk_padding_mask.to(device), us_padding_mask.to(device)], dim=1)
