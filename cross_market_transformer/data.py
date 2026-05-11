@@ -390,7 +390,11 @@ def build_samples_from_excel_pair(
     if not x_hk_list:
         raise ValueError("No valid aligned samples were created. Check lookback lengths and date overlap.")
 
-    target_dtype = np.float32 if task_type in {"regression", "binary_classification", "regression_peak_trough"} else np.int64
+    target_dtype = (
+        np.float32
+        if task_type in {"regression", "binary_classification", "regression_peak_trough", PEAK_TROUGH_TASK_TYPE}
+        else np.int64
+    )
     return {
         "x_hk": np.asarray(x_hk_list, dtype=np.float32),
         "x_us": np.asarray(x_us_list, dtype=np.float32),
@@ -764,7 +768,7 @@ def retarget_regression_peak_trough_dataset(
     dataset: CrossMarketDataset,
     task_type: str,
 ) -> CrossMarketDataset:
-    """Reuse a joint [r1, target_peak] dataset for one single-task objective."""
+    """Reuse a joint [r1, target_peak_class] dataset for one single-task objective."""
     target = dataset.target
     if target.ndim != 2 or target.shape[1] != 2:
         raise ValueError("Expected a regression_peak_trough dataset with target shape [num_samples, 2].")
@@ -772,7 +776,7 @@ def retarget_regression_peak_trough_dataset(
     if task_type == "regression":
         new_target = target[:, 0].float()
     elif task_type == PEAK_TROUGH_TASK_TYPE:
-        new_target = target[:, 1].long()
+        new_target = _peak_trough_binary_targets_from_class_labels(target[:, 1])
     elif task_type == "regression_peak_trough":
         new_target = target
     else:
@@ -813,13 +817,28 @@ def _build_target(
     if task_type == PEAK_TROUGH_TASK_TYPE:
         if target_peak_value is None:
             raise ValueError("target_peak_value is required for peak_trough_classification.")
-        return int(target_peak_value)
+        return _peak_trough_binary_target_from_class_label(target_peak_value)
     if task_type == "binary_classification":
         return 1.0 if target_value > 0.0 else 0.0
     if task_type == "multiclass_classification":
         thresholds = list(multiclass_thresholds) if multiclass_thresholds is not None else _default_multiclass_thresholds(multiclass_num_classes)
         return int(np.digitize(target_value, thresholds))
     raise ValueError(f"Unsupported task_type: {task_type}")
+
+
+def _peak_trough_binary_target_from_class_label(target_peak_value: float | int) -> np.ndarray:
+    """Convert target_peak class 0/1/2 into [is_peak, is_trough]."""
+    label = int(target_peak_value)
+    if label not in {0, 1, 2}:
+        raise ValueError(f"target_peak must be encoded as 0=trough, 1=neutral, 2=peak; got {target_peak_value}.")
+    return np.asarray([1.0 if label == 2 else 0.0, 1.0 if label == 0 else 0.0], dtype=np.float32)
+
+
+def _peak_trough_binary_targets_from_class_labels(labels: torch.Tensor) -> torch.Tensor:
+    labels = labels.long().view(-1)
+    if torch.any((labels < 0) | (labels > 2)):
+        raise ValueError("target_peak labels must be encoded as 0=trough, 1=neutral, 2=peak.")
+    return torch.stack([(labels == 2).float(), (labels == 0).float()], dim=1)
 
 
 def _default_multiclass_thresholds(num_classes: int) -> list[float]:

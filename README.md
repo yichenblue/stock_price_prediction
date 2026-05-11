@@ -49,10 +49,10 @@ Notes:
 - The default training entrypoint uses a shared prediction head on top of the cross-market backbone.
 - The default main setting trains two separate models with the same shared-head cross-market architecture:
   - `r1`: predicts raw HK next-day `r1`; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
-  - `peak_trough`: predicts `target_peak` as a three-class probability distribution `[trough, neutral, peak]`.
+  - `peak_trough`: predicts two independent event probabilities `[P(peak), P(trough)]` with sigmoid heads.
 - The two default tasks use separate training hyperparameters:
   - `r1`: `num_epochs=60`, `learning_rate=1e-4`, `weight_decay=7e-4`, `dropout=0.3`
-  - `peak_trough`: `num_epochs=30`, `learning_rate=5e-5`, `weight_decay=1e-3`, `dropout=0.35`, `class_weight=[4.0, 1.0, 4.0]`
+  - `peak_trough`: `num_epochs=35`, `learning_rate=5e-5`, `weight_decay=1e-3`, `dropout=0.35`, `class_weight=[6.0, 5.0]` as `[peak_pos_weight, trough_pos_weight]`
 - The default main model uses `P_index` as a normal HK/US sequence feature.
 - Company-specific heads are still available in `CrossMarketTransformerModel`.
 - Padding masks are supported for future variable-length sequence handling.
@@ -73,8 +73,8 @@ Notes:
   - The default is `feature`, so the default HK/US input dimension includes `P_index`.
   - HK-only baselines accept the batch field but do not use auxiliary cross-market P-index features, so they remain HK-only.
 - Other supported targets:
-  - `regression_peak_trough`: legacy joint model that predicts HK `r1` and peak/trough class together
-  - `peak_trough_classification`: predict `target_peak` only as `[trough, neutral, peak]`
+  - `regression_peak_trough`: legacy joint data format that stores `[r1, target_peak]`; model output is `[r1, peak_logit, trough_logit]`
+  - `peak_trough_classification`: predict `target_peak` as two independent event logits `[peak_logit, trough_logit]`
   - `regression`: predict raw `r1`, and report `IC`, `MSE/RMSE`, and sign-based `accuracy`
   - `binary_classification`: predict whether `r1 > 0`
   - `multiclass_classification`: discretize `r1` with configured thresholds

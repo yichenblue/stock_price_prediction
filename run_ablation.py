@@ -28,9 +28,8 @@ from minimal_config import (
     make_task_train_config,
 )
 from cross_market_transformer.trainer import (
-    _binary_event_metrics,
-    _classification_metrics,
     _information_coefficient,
+    _peak_trough_metrics_from_event_logits,
 )
 
 TASK_RUNS = [
@@ -92,40 +91,21 @@ def _random_walk_regression_metrics(dataset) -> dict[str, float]:
 
 
 def _random_walk_peak_trough_metrics(dataset) -> dict[str, float]:
-    target = dataset.target.long().view(-1)
-    logits = torch.zeros((target.numel(), 3), dtype=torch.float32)
-    logits[:, 1] = 1.0  # Random walk expected-return view maps to a neutral state.
+    target = dataset.target.float()
+    logits = torch.full_like(target, -10.0)  # Random walk maps to near-zero peak/trough event probabilities.
 
-    weight = None
+    pos_weight = None
     peak_train_config = make_task_train_config("peak_trough_classification")
     if peak_train_config.class_weight is not None:
-        weight = torch.tensor(peak_train_config.class_weight, dtype=torch.float32)
-    loss = F.cross_entropy(logits, target, weight=weight).item()
-
-    labels = torch.argmax(logits, dim=-1)
-    metrics = _classification_metrics(
-        labels,
-        target,
-        num_classes=3,
-        class_names=("trough", "neutral", "peak"),
-    )
-    probs = torch.softmax(logits, dim=-1)
-    metrics.update(
-        _binary_event_metrics(
-            scores=probs[:, 2],
-            target=target == 2,
-            threshold=0.5,
-            prefix="peak_thr50",
-        )
-    )
-    metrics.update(
-        _binary_event_metrics(
-            scores=probs[:, 0],
-            target=target == 0,
-            threshold=0.5,
-            prefix="trough_thr50",
-        )
-    )
+        if len(peak_train_config.class_weight) == 2:
+            pos_weight = torch.tensor(peak_train_config.class_weight, dtype=torch.float32)
+        elif len(peak_train_config.class_weight) == 3:
+            pos_weight = torch.tensor(
+                [peak_train_config.class_weight[2], peak_train_config.class_weight[0]],
+                dtype=torch.float32,
+            )
+    loss = F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight).item()
+    metrics = _peak_trough_metrics_from_event_logits(logits, target)
     return {"loss": loss, **metrics}
 
 
