@@ -209,8 +209,8 @@ class PreOpenAggregator(nn.Module):
         p_index_gap_feature_dim: int = 4,
     ) -> None:
         super().__init__()
+        del num_companies
         self.pre_open_query = nn.Parameter(torch.randn(1, 1, d_model))
-        self.company_embedding = nn.Embedding(num_companies, d_model)
         self.session_embedding = nn.Embedding(2, d_model)
         self.global_timing_projection = nn.Sequential(
             nn.Linear(2, d_model),
@@ -246,9 +246,9 @@ class PreOpenAggregator(nn.Module):
         hk_padding_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # fused_hk: [batch, hk_len, d_model]
+        del company_id
         batch_size = fused_hk.size(0)
         query = self.pre_open_query.expand(batch_size, -1, -1)  # [batch, 1, d_model]
-        query = query + self.company_embedding(company_id).unsqueeze(1)
         query = query + self.session_embedding(us_open_prev_night).unsqueeze(1)
         timing_features = torch.stack(
             [

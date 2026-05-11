@@ -5,7 +5,7 @@ This directory contains a first-version PyTorch implementation for Hong Kong pre
 - Hong Kong history up to `t-1`
 - U.S. history up to the most recent completed U.S. session before HK opens on day `t`
 - `us_open_prev_night`
-- `company_id`
+- `company_id` in the dataset schema; the current main model does not use a company embedding
 
 Modules:
 
@@ -43,14 +43,15 @@ Expected sample fields:
 
 Notes:
 
-- Splits are chronological only through `chronological_split`.
+- `chronological_split` is still available as a utility, but the formal main/ablation setting now uses a held-out-company split.
 - Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Cleaned.xlsx` inputs.
-- Multi-company train/val/test splitting is done per company first, then merged across companies.
+- The default main/ablation split uses the first 25 discovered companies' full history for training and the remaining companies' full history for testing. No validation split is used.
 - The default training entrypoint uses a shared prediction head on top of the cross-market backbone.
 - The default main setting trains one shared-head cross-market model for the joint target:
   - output: `[r1, peak_logit, trough_logit]`
   - `r1`: raw HK next-day log-return; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
   - `peak/trough`: two independent event probabilities `[P(peak), P(trough)]` from sigmoid logits.
+- Company embeddings are removed from the pre-open query; company identity is not directly injected into the current main model.
 - The default joint task uses:
   - `num_epochs=60`, `learning_rate=1e-4`, `weight_decay=7e-4`, `dropout=0.35`
   - `r1_loss_weight=50.0`, `peak_trough_loss_weight=1.0`
@@ -64,7 +65,7 @@ Notes:
   - HK input windows are normalized with HK history available up to `t-1`
   - US input windows are normalized with US history available up to the latest usable US session
 - The Excel loader supports your current files such as `09988.HK_Cleaned.xlsx` and `BABA_Cleaned.xlsx`.
-- The trainer now prints one log line per epoch and saves a train-vs-val plot if `matplotlib` is installed.
+- The trainer now prints one log line per epoch and saves a train/validation/test plot if `matplotlib` is installed; runs without validation plot train/test only.
 - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak.
 - `regression_peak_trough` is the main joint task format. It stores `[r1, target_peak]` and trains a single model to predict `[r1, peak_logit, trough_logit]`.
 - `P_index` is configurable through `P_INDEX_MODE`:
@@ -91,6 +92,8 @@ Notes:
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
 - `run_ablation.py` compares the formal baseline/main/ablation setting:
+  - split: first 25 discovered companies are used for training with full history; remaining companies are used for held-out testing with full history
+  - no validation split is used
   - `random_walk`: non-trained financial baseline; predicts zero next-day return and no peak/trough event signal
   - `main_shared_head`: shared-head cross-market Transformer using HK and US data with `P_index`
   - `hk_only_shared_head`: HK-only Transformer with the same shared-head joint output; `P_index` is removed

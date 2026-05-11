@@ -8,7 +8,7 @@ from cross_market_transformer import (
     CrossMarketTransformerSharedHeadModel,
     HKTransformerOnlyModel,
     Trainer,
-    build_multi_company_splits,
+    build_multi_company_dataset,
     discover_cleaned_pairs,
     numpy_collate_fn,
 )
@@ -33,6 +33,9 @@ from minimal_config import (
 )
 
 
+TRAIN_COMPANY_COUNT = 25
+
+
 def _make_loader(dataset, train_config):
     return DataLoader(
         dataset,
@@ -43,14 +46,41 @@ def _make_loader(dataset, train_config):
     )
 
 
-def make_joint_datasets(company_specs, p_index_mode: str):
-    return build_multi_company_splits(
+def _reindex_company_specs(company_specs):
+    reindexed_specs = []
+    for new_company_id, spec in enumerate(company_specs):
+        updated_spec = dict(spec)
+        updated_spec["company_id"] = new_company_id
+        reindexed_specs.append(updated_spec)
+    return reindexed_specs
+
+
+def split_company_specs(company_specs, train_company_count: int = TRAIN_COMPANY_COUNT):
+    if len(company_specs) <= train_company_count:
+        raise ValueError(
+            f"Need more than {train_company_count} company pairs for held-out-company testing; "
+            f"found {len(company_specs)}."
+        )
+    train_specs = _reindex_company_specs(company_specs[:train_company_count])
+    test_specs = _reindex_company_specs(company_specs[train_company_count:])
+    return train_specs, test_specs
+
+
+def print_company_split(split_name: str, company_specs) -> None:
+    print(f"{split_name} companies ({len(company_specs)}):")
+    for spec in company_specs:
+        print(
+            f"  [{spec['company_id']:02d}] {spec['company_name']}: "
+            f"HK={spec['hk_path']} | US={spec['us_path']}"
+        )
+    print()
+
+
+def make_joint_dataset(company_specs, p_index_mode: str):
+    return build_multi_company_dataset(
         company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
-        train_ratio=0.7,
-        val_ratio=0.15,
-        test_ratio=0.15,
         task_type=JOINT_TARGET_TASK_TYPE,
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
@@ -122,23 +152,22 @@ def _random_walk_joint_metrics(dataset) -> dict[str, float]:
     return metrics
 
 
-def evaluate_random_walk_baseline(joint_train_set, joint_val_set, joint_test_set):
+def evaluate_random_walk_baseline(joint_train_set, joint_test_set):
     print("=" * 100)
     print("Running baseline: random_walk")
     train_metrics = _random_walk_joint_metrics(joint_train_set)
-    val_metrics = _random_walk_joint_metrics(joint_val_set)
     test_metrics = _random_walk_joint_metrics(joint_test_set)
     print(f"Train metrics: {train_metrics}")
-    print(f"Val metrics: {val_metrics}")
     print(f"Test metrics: {test_metrics}")
-    return [("random_walk", "val_loss", val_metrics["loss"], test_metrics)]
+    return [("random_walk", "train_loss", train_metrics["loss"], test_metrics)]
 
 
-def run_model_experiment(run_name, model_cls, p_index_mode, company_specs):
+def run_model_experiment(run_name, model_cls, p_index_mode, train_specs, test_specs):
     print("=" * 100)
     print(f"Running experiment: {run_name} ({JOINT_TARGET_TASK_TYPE}, p_index_mode={p_index_mode})")
 
-    train_set, val_set, test_set = make_joint_datasets(company_specs, p_index_mode=p_index_mode)
+    train_set = make_joint_dataset(train_specs, p_index_mode=p_index_mode)
+    test_set = make_joint_dataset(test_specs, p_index_mode=p_index_mode)
     train_config = make_task_train_config(JOINT_TARGET_TASK_TYPE)
     train_config.checkpoint_name = f"{run_name}.pt"
     train_config.history_plot_name = f"{run_name}_history.png"
@@ -146,13 +175,12 @@ def run_model_experiment(run_name, model_cls, p_index_mode, company_specs):
     train_config.threshold_sweep_plot_name = f"{run_name}_threshold_sweep.png"
 
     train_loader = _make_loader(train_set, train_config)
-    val_loader = _make_loader(val_set, train_config)
     test_loader = _make_loader(test_set, train_config)
 
     model_config = make_task_model_config(
         JOINT_TARGET_TASK_TYPE,
         num_classes=3,
-        num_companies=len(company_specs),
+        num_companies=len(train_specs),
         hk_input_dim=train_set.x_hk.shape[-1],
         us_input_dim=train_set.x_us.shape[-1],
         p_index_mode=p_index_mode,
@@ -167,7 +195,7 @@ def run_model_experiment(run_name, model_cls, p_index_mode, company_specs):
         task_type=model_config.task_type,
         num_classes=model_config.num_classes,
     )
-    fit_result = trainer.fit(train_loader, val_loader, test_loader=test_loader)
+    fit_result = trainer.fit(train_loader, val_loader=None, test_loader=test_loader)
     test_metrics = trainer.evaluate(test_loader)
 
     print(f"Finished experiment: {run_name}")
@@ -188,8 +216,13 @@ def main() -> None:
         )
     print()
 
-    base_train_set, base_val_set, base_test_set = make_joint_datasets(company_specs, p_index_mode=P_INDEX_MODE)
-    results = evaluate_random_walk_baseline(base_train_set, base_val_set, base_test_set)
+    train_specs, test_specs = split_company_specs(company_specs)
+    print_company_split("Train", train_specs)
+    print_company_split("Test", test_specs)
+
+    base_train_set = make_joint_dataset(train_specs, p_index_mode=P_INDEX_MODE)
+    base_test_set = make_joint_dataset(test_specs, p_index_mode=P_INDEX_MODE)
+    results = evaluate_random_walk_baseline(base_train_set, base_test_set)
 
     for experiment in build_experiments():
         results.append(
@@ -197,7 +230,8 @@ def main() -> None:
                 run_name=experiment["name"],
                 model_cls=experiment["model_cls"],
                 p_index_mode=experiment["p_index_mode"],
-                company_specs=company_specs,
+                train_specs=train_specs,
+                test_specs=test_specs,
             )
         )
 

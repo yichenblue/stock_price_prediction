@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from cross_market_transformer import build_multi_company_splits, discover_cleaned_pairs
+from cross_market_transformer import build_multi_company_dataset, discover_cleaned_pairs
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
@@ -15,6 +15,45 @@ from minimal_config import (
     USE_US_PREV_NIGHT,
     US_LOOKBACK,
 )
+
+
+TRAIN_COMPANY_COUNT = 25
+
+
+def reindex_company_specs(company_specs):
+    reindexed_specs = []
+    for new_company_id, spec in enumerate(company_specs):
+        updated_spec = dict(spec)
+        updated_spec["company_id"] = new_company_id
+        reindexed_specs.append(updated_spec)
+    return reindexed_specs
+
+
+def split_company_specs(company_specs, train_company_count: int = TRAIN_COMPANY_COUNT):
+    if len(company_specs) <= train_company_count:
+        raise ValueError(
+            f"Need more than {train_company_count} company pairs for held-out-company testing; "
+            f"found {len(company_specs)}."
+        )
+    train_specs = reindex_company_specs(company_specs[:train_company_count])
+    test_specs = reindex_company_specs(company_specs[train_company_count:])
+    return train_specs, test_specs
+
+
+def build_regression_dataset(company_specs):
+    return build_multi_company_dataset(
+        company_specs=company_specs,
+        hk_lookback=HK_LOOKBACK,
+        us_lookback=US_LOOKBACK,
+        task_type="regression",
+        target_col=TARGET_COL,
+        multiclass_num_classes=MODEL_CONFIG.num_classes,
+        use_us_prev_night=USE_US_PREV_NIGHT,
+        normalization_mode=NORMALIZATION_MODE,
+        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
+        p_index_mode=P_INDEX_MODE,
+        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
+    )
 
 
 def summarize_split(name: str, values: np.ndarray) -> None:
@@ -54,34 +93,20 @@ def summarize_split(name: str, values: np.ndarray) -> None:
 
 def main() -> None:
     company_specs = discover_cleaned_pairs(DATASET_ROOT)
-    train_set, val_set, test_set = build_multi_company_splits(
-        company_specs=company_specs,
-        hk_lookback=HK_LOOKBACK,
-        us_lookback=US_LOOKBACK,
-        train_ratio=0.7,
-        val_ratio=0.15,
-        test_ratio=0.15,
-        task_type="regression",
-        target_col=TARGET_COL,
-        multiclass_num_classes=MODEL_CONFIG.num_classes,
-        use_us_prev_night=USE_US_PREV_NIGHT,
-        normalization_mode=NORMALIZATION_MODE,
-        rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
-        p_index_mode=P_INDEX_MODE,
-        p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
-    )
+    train_specs, test_specs = split_company_specs(company_specs)
+    train_set = build_regression_dataset(train_specs)
+    test_set = build_regression_dataset(test_specs)
     train_targets = train_set.target.numpy().astype(np.float64)
-    val_targets = val_set.target.numpy().astype(np.float64)
     test_targets = test_set.target.numpy().astype(np.float64)
 
     print(f"Number of company pairs: {len(company_specs)}")
+    print(f"Train company pairs: {len(train_specs)}")
+    print(f"Test company pairs : {len(test_specs)}")
     print(f"Train samples: {len(train_set)}")
-    print(f"Val samples  : {len(val_set)}")
     print(f"Test samples : {len(test_set)}")
     print()
 
     summarize_split("train", train_targets)
-    summarize_split("val", val_targets)
     summarize_split("test", test_targets)
 
 
