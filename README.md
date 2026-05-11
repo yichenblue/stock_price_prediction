@@ -47,12 +47,14 @@ Notes:
 - Full-dataset training now scans `dataset/` automatically and uses all company pairs with `_Cleaned.xlsx` inputs.
 - Multi-company train/val/test splitting is done per company first, then merged across companies.
 - The default training entrypoint uses a shared prediction head on top of the cross-market backbone.
-- The default main setting trains two separate models with the same shared-head cross-market architecture:
-  - `r1`: predicts raw HK next-day `r1`; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
-  - `peak_trough`: predicts two independent event probabilities `[P(peak), P(trough)]` with sigmoid heads.
-- The two default tasks use separate training hyperparameters:
-  - `r1`: `num_epochs=60`, `learning_rate=1e-4`, `weight_decay=7e-4`, `dropout=0.3`
-  - `peak_trough`: `num_epochs=35`, `learning_rate=5e-5`, `weight_decay=1e-3`, `dropout=0.35`, `class_weight=[6.0, 5.0]` as `[peak_pos_weight, trough_pos_weight]`
+- The default main setting trains one shared-head cross-market model for the joint target:
+  - output: `[r1, peak_logit, trough_logit]`
+  - `r1`: raw HK next-day log-return; reports `IC`, `MSE/RMSE/MAE`, and sign accuracy.
+  - `peak/trough`: two independent event probabilities `[P(peak), P(trough)]` from sigmoid logits.
+- The default joint task uses:
+  - `num_epochs=60`, `learning_rate=1e-4`, `weight_decay=7e-4`, `dropout=0.35`
+  - `r1_loss_weight=50.0`, `peak_trough_loss_weight=1.0`
+  - `class_weight=[6.0, 5.0]` as `[peak_pos_weight, trough_pos_weight]`
 - The default main model uses `P_index` as a normal HK/US sequence feature.
 - Company-specific heads are still available in `CrossMarketTransformerModel`.
 - Padding masks are supported for future variable-length sequence handling.
@@ -64,7 +66,7 @@ Notes:
 - The Excel loader supports your current files such as `09988.HK_Cleaned.xlsx` and `BABA_Cleaned.xlsx`.
 - The trainer now prints one log line per epoch and saves a train-vs-val plot if `matplotlib` is installed.
 - `target_peak=0` means trough, `target_peak=1` means neutral, and `target_peak=2` means peak.
-- `regression_peak_trough` is retained as a joint-target data format for compatibility, but the main scripts now retarget it into two independent single-task datasets before training.
+- `regression_peak_trough` is the main joint task format. It stores `[r1, target_peak]` and trains a single model to predict `[r1, peak_logit, trough_logit]`.
 - `P_index` is configurable through `P_INDEX_MODE`:
   - `feature`: use `P_index` as a normal HK/US sequence feature
   - `none`: remove `P_index` entirely
@@ -88,10 +90,12 @@ Notes:
   - the most recent completed US session is excluded
   - the US sequence ends one session earlier
   - `us_open_prev_night` is forced to 0 to avoid leaking previous-night information
-- `run_ablation.py` compares two structural ablations. Each ablation trains one `r1` model and one `peak_trough` model:
-  - `random_walk`: non-trained baseline; predicts zero next-day return and neutral peak/trough state
-  - `hk_us_concat`: main-style HK/US Transformer encoders plus shared head, but no cross-attention; the pre-open query attends over concatenated HK/US tokens
-  - `hk_transformer_only`
+- `run_ablation.py` compares the formal baseline/main/ablation setting:
+  - `random_walk`: non-trained financial baseline; predicts zero next-day return and no peak/trough event signal
+  - `main_shared_head`: shared-head cross-market Transformer using HK and US data with `P_index`
+  - `hk_only_shared_head`: HK-only Transformer with the same shared-head joint output; `P_index` is removed
+  - `main_no_p_index`: same as the main model, but removes `P_index` from HK/US input features
+  - Every neural experiment trains one joint model for `[r1, peak_logit, trough_logit]`.
 - `run_p_index_ablation.py` compares:
   - A. `P_index` as a normal feature
   - B. no `P_index`

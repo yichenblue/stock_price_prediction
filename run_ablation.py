@@ -5,17 +5,21 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from cross_market_transformer import (
+    CrossMarketTransformerSharedHeadModel,
     HKTransformerOnlyModel,
-    HKUSConcatBaseline,
     Trainer,
     build_multi_company_splits,
     discover_cleaned_pairs,
     numpy_collate_fn,
-    retarget_regression_peak_trough_dataset,
+)
+from cross_market_transformer.trainer import (
+    _information_coefficient,
+    _peak_trough_metrics_from_event_logits,
 )
 from minimal_config import (
     DATASET_ROOT,
     HK_LOOKBACK,
+    JOINT_TARGET_TASK_TYPE,
     MODEL_CONFIG,
     NORMALIZATION_MODE,
     P_INDEX_GAP_THRESHOLD,
@@ -27,15 +31,6 @@ from minimal_config import (
     make_task_model_config,
     make_task_train_config,
 )
-from cross_market_transformer.trainer import (
-    _information_coefficient,
-    _peak_trough_metrics_from_event_logits,
-)
-
-TASK_RUNS = [
-    ("r1", "regression"),
-    ("peak_trough", "peak_trough_classification"),
-]
 
 
 def _make_loader(dataset, train_config):
@@ -48,99 +43,142 @@ def _make_loader(dataset, train_config):
     )
 
 
-def make_joint_datasets(company_specs):
-    train_set, val_set, test_set = build_multi_company_splits(
+def make_joint_datasets(company_specs, p_index_mode: str):
+    return build_multi_company_splits(
         company_specs=company_specs,
         hk_lookback=HK_LOOKBACK,
         us_lookback=US_LOOKBACK,
         train_ratio=0.7,
         val_ratio=0.15,
         test_ratio=0.15,
-        task_type="regression_peak_trough",
+        task_type=JOINT_TARGET_TASK_TYPE,
         target_col=TARGET_COL,
         multiclass_num_classes=MODEL_CONFIG.num_classes,
         use_us_prev_night=USE_US_PREV_NIGHT,
         normalization_mode=NORMALIZATION_MODE,
         rolling_normalization_window=ROLLING_NORMALIZATION_WINDOW,
-        p_index_mode=P_INDEX_MODE,
+        p_index_mode=p_index_mode,
         p_index_gap_threshold=P_INDEX_GAP_THRESHOLD,
     )
-    return train_set, val_set, test_set
 
 
 def build_experiments():
     return [
-        ("hk_us_concat", HKUSConcatBaseline),
-        ("hk_transformer_only", HKTransformerOnlyModel),
+        {
+            "name": "main_shared_head",
+            "model_cls": CrossMarketTransformerSharedHeadModel,
+            "p_index_mode": P_INDEX_MODE,
+        },
+        {
+            "name": "hk_only_shared_head",
+            "model_cls": HKTransformerOnlyModel,
+            "p_index_mode": "none",
+        },
+        {
+            "name": "main_no_p_index",
+            "model_cls": CrossMarketTransformerSharedHeadModel,
+            "p_index_mode": "none",
+        },
     ]
 
 
-def _random_walk_regression_metrics(dataset) -> dict[str, float]:
-    target = dataset.target.float().view(-1)
-    preds = torch.zeros_like(target)
-    mse = torch.mean((preds - target) ** 2).item()
-    mae = torch.mean(torch.abs(preds - target)).item()
-    return {
-        "loss": mse,
-        "mse": mse,
-        "rmse": mse ** 0.5,
-        "mae": mae,
-        "ic": _information_coefficient(preds, target),
-        "sign_accuracy": ((preds >= 0) == (target >= 0)).float().mean().item(),
-    }
+def _peak_trough_binary_targets_from_class_labels(labels: torch.Tensor) -> torch.Tensor:
+    labels = labels.long().view(-1)
+    return torch.stack([(labels == 2).float(), (labels == 0).float()], dim=1)
 
 
-def _random_walk_peak_trough_metrics(dataset) -> dict[str, float]:
+def _random_walk_joint_metrics(dataset) -> dict[str, float]:
     target = dataset.target.float()
-    logits = torch.full_like(target, -10.0)  # Random walk maps to near-zero peak/trough event probabilities.
+    r1_target = target[:, 0]
+    r1_preds = torch.zeros_like(r1_target)
+    r1_mse = torch.mean((r1_preds - r1_target) ** 2).item()
+    r1_mae = torch.mean(torch.abs(r1_preds - r1_target)).item()
 
+    # Random walk expected-return view predicts zero next-day return and no
+    # peak/trough event signal.
+    peak_trough_logits = torch.full((target.size(0), 2), -10.0, dtype=torch.float32)
+    peak_trough_target = _peak_trough_binary_targets_from_class_labels(target[:, 1])
+
+    train_config = make_task_train_config(JOINT_TARGET_TASK_TYPE)
     pos_weight = None
-    peak_train_config = make_task_train_config("peak_trough_classification")
-    if peak_train_config.class_weight is not None:
-        if len(peak_train_config.class_weight) == 2:
-            pos_weight = torch.tensor(peak_train_config.class_weight, dtype=torch.float32)
-        elif len(peak_train_config.class_weight) == 3:
-            pos_weight = torch.tensor(
-                [peak_train_config.class_weight[2], peak_train_config.class_weight[0]],
-                dtype=torch.float32,
-            )
-    loss = F.binary_cross_entropy_with_logits(logits, target, pos_weight=pos_weight).item()
-    metrics = _peak_trough_metrics_from_event_logits(logits, target)
-    return {"loss": loss, **metrics}
+    if train_config.class_weight is not None:
+        pos_weight = torch.tensor(train_config.class_weight, dtype=torch.float32)
+    peak_trough_loss = F.binary_cross_entropy_with_logits(
+        peak_trough_logits,
+        peak_trough_target,
+        pos_weight=pos_weight,
+    ).item()
+    loss = train_config.r1_loss_weight * r1_mse + train_config.peak_trough_loss_weight * peak_trough_loss
+
+    metrics = {
+        "loss": loss,
+        "r1_mse": r1_mse,
+        "r1_rmse": r1_mse ** 0.5,
+        "r1_mae": r1_mae,
+        "r1_ic": _information_coefficient(r1_preds, r1_target),
+        "r1_sign_accuracy": ((r1_preds >= 0) == (r1_target >= 0)).float().mean().item(),
+    }
+    metrics.update(_peak_trough_metrics_from_event_logits(peak_trough_logits, peak_trough_target))
+    return metrics
 
 
 def evaluate_random_walk_baseline(joint_train_set, joint_val_set, joint_test_set):
-    results = []
-    evaluators = {
-        "regression": _random_walk_regression_metrics,
-        "peak_trough_classification": _random_walk_peak_trough_metrics,
-    }
-    for task_name, task_type in TASK_RUNS:
-        run_name = f"random_walk_{task_name}"
-        print("=" * 100)
-        print(f"Running baseline: {run_name} ({task_type})")
-        train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
-        val_set = retarget_regression_peak_trough_dataset(joint_val_set, task_type)
-        test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
-        evaluate = evaluators[task_type]
-        train_metrics = evaluate(train_set)
-        val_metrics = evaluate(val_set)
-        test_metrics = evaluate(test_set)
+    print("=" * 100)
+    print("Running baseline: random_walk")
+    train_metrics = _random_walk_joint_metrics(joint_train_set)
+    val_metrics = _random_walk_joint_metrics(joint_val_set)
+    test_metrics = _random_walk_joint_metrics(joint_test_set)
+    print(f"Train metrics: {train_metrics}")
+    print(f"Val metrics: {val_metrics}")
+    print(f"Test metrics: {test_metrics}")
+    return [("random_walk", "val_loss", val_metrics["loss"], test_metrics)]
 
-        print(f"Train metrics: {train_metrics}")
-        print(f"Val metrics: {val_metrics}")
-        print(f"Test metrics: {test_metrics}")
-        results.append((run_name, "val_loss", val_metrics["loss"], test_metrics))
-    return results
+
+def run_model_experiment(run_name, model_cls, p_index_mode, company_specs):
+    print("=" * 100)
+    print(f"Running experiment: {run_name} ({JOINT_TARGET_TASK_TYPE}, p_index_mode={p_index_mode})")
+
+    train_set, val_set, test_set = make_joint_datasets(company_specs, p_index_mode=p_index_mode)
+    train_config = make_task_train_config(JOINT_TARGET_TASK_TYPE)
+    train_config.checkpoint_name = f"{run_name}.pt"
+    train_config.history_plot_name = f"{run_name}_history.png"
+    train_config.threshold_sweep_name = f"{run_name}_threshold_sweep.csv"
+    train_config.threshold_sweep_plot_name = f"{run_name}_threshold_sweep.png"
+
+    train_loader = _make_loader(train_set, train_config)
+    val_loader = _make_loader(val_set, train_config)
+    test_loader = _make_loader(test_set, train_config)
+
+    model_config = make_task_model_config(
+        JOINT_TARGET_TASK_TYPE,
+        num_classes=3,
+        num_companies=len(company_specs),
+        hk_input_dim=train_set.x_hk.shape[-1],
+        us_input_dim=train_set.x_us.shape[-1],
+        p_index_mode=p_index_mode,
+        p_index_gap_feature_dim=train_set.p_index_gap_features.shape[-1],
+    )
+
+    torch.manual_seed(42)
+    model = model_cls(model_config)
+    trainer = Trainer(
+        model=model,
+        train_config=train_config,
+        task_type=model_config.task_type,
+        num_classes=model_config.num_classes,
+    )
+    fit_result = trainer.fit(train_loader, val_loader, test_loader=test_loader)
+    test_metrics = trainer.evaluate(test_loader)
+
+    print(f"Finished experiment: {run_name}")
+    print(f"Best {fit_result['best_score_name']}: {fit_result['best_score']:.6f}")
+    print(f"Test metrics: {test_metrics}")
+    return run_name, fit_result["best_score_name"], fit_result["best_score"], test_metrics
 
 
 def main() -> None:
     torch.manual_seed(42)
     company_specs = discover_cleaned_pairs(DATASET_ROOT)
-    joint_train_set, joint_val_set, joint_test_set = make_joint_datasets(company_specs)
-    hk_input_dim = joint_train_set.x_hk.shape[-1]
-    us_input_dim = joint_train_set.x_us.shape[-1]
-    p_index_gap_feature_dim = joint_train_set.p_index_gap_features.shape[-1]
 
     print("Loaded leak-free cleaned company pairs:")
     for spec in company_specs:
@@ -150,55 +188,23 @@ def main() -> None:
         )
     print()
 
-    results = evaluate_random_walk_baseline(joint_train_set, joint_val_set, joint_test_set)
-    for exp_name, model_cls in build_experiments():
-        for task_name, task_type in TASK_RUNS:
-            run_name = f"{exp_name}_{task_name}"
-            print("=" * 100)
-            print(f"Running experiment: {run_name} ({task_type})")
+    base_train_set, base_val_set, base_test_set = make_joint_datasets(company_specs, p_index_mode=P_INDEX_MODE)
+    results = evaluate_random_walk_baseline(base_train_set, base_val_set, base_test_set)
 
-            train_set = retarget_regression_peak_trough_dataset(joint_train_set, task_type)
-            val_set = retarget_regression_peak_trough_dataset(joint_val_set, task_type)
-            test_set = retarget_regression_peak_trough_dataset(joint_test_set, task_type)
-            train_config = make_task_train_config(task_type)
-            train_config.checkpoint_name = f"{run_name}.pt"
-            train_config.history_plot_name = f"{run_name}_history.png"
-            train_config.threshold_sweep_name = f"{run_name}_threshold_sweep.csv"
-            train_config.threshold_sweep_plot_name = f"{run_name}_threshold_sweep.png"
-
-            train_loader = _make_loader(train_set, train_config)
-            val_loader = _make_loader(val_set, train_config)
-            test_loader = _make_loader(test_set, train_config)
-
-            model_config = make_task_model_config(
-                task_type,
-                num_classes=3,
-                num_companies=len(company_specs),
-                hk_input_dim=hk_input_dim,
-                us_input_dim=us_input_dim,
-                p_index_gap_feature_dim=p_index_gap_feature_dim,
+    for experiment in build_experiments():
+        results.append(
+            run_model_experiment(
+                run_name=experiment["name"],
+                model_cls=experiment["model_cls"],
+                p_index_mode=experiment["p_index_mode"],
+                company_specs=company_specs,
             )
-
-            torch.manual_seed(42)
-            model = model_cls(model_config)
-            trainer = Trainer(
-                model=model,
-                train_config=train_config,
-                task_type=model_config.task_type,
-                num_classes=model_config.num_classes,
-            )
-            fit_result = trainer.fit(train_loader, val_loader, test_loader=test_loader)
-            test_metrics = trainer.evaluate(test_loader)
-            results.append((run_name, fit_result["best_score_name"], fit_result["best_score"], test_metrics))
-
-            print(f"Finished experiment: {run_name}")
-            print(f"Best {fit_result['best_score_name']}: {fit_result['best_score']:.6f}")
-            print(f"Test metrics: {test_metrics}")
+        )
 
     print("=" * 100)
-    print("Ablation summary")
+    print("Baseline and ablation summary")
     for exp_name, best_score_name, best_score, test_metrics in results:
-        print(f"{exp_name:28s} | {best_score_name}={best_score:.6f} | test={test_metrics}")
+        print(f"{exp_name:24s} | {best_score_name}={best_score:.6f} | test={test_metrics}")
 
 
 if __name__ == "__main__":

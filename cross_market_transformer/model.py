@@ -511,9 +511,9 @@ class CrossMarketTransformerSharedHeadModel(nn.Module):
 
 class HKTransformerOnlyModel(nn.Module):
     """
-    Strong ablation baseline:
-    keep the HK Transformer encoder and pre-open aggregation,
-    but remove the US stream and cross-market fusion entirely.
+    HK-only ablation:
+    keep the HK Transformer encoder and pre-open aggregation with a shared
+    prediction head, but remove the US stream and cross-market fusion entirely.
     """
 
     def __init__(self, config: ModelConfig) -> None:
@@ -540,8 +540,7 @@ class HKTransformerOnlyModel(nn.Module):
             use_p_index_gap_gate=False,
             p_index_gap_feature_dim=config.p_index_gap_feature_dim,
         )
-        self.company_specific_heads = CompanySpecificHeads(
-            num_companies=config.num_companies,
+        self.shared_head = SharedHead(
             input_dim=config.d_model,
             hidden_dim=config.head_hidden_dim,
             output_dim=output_dim,
@@ -573,7 +572,7 @@ class HKTransformerOnlyModel(nn.Module):
             p_index_gap_features=p_index_gap_features,
             hk_padding_mask=hk_padding_mask,
         )
-        logits = self.company_specific_heads(z, company_id)
+        logits = self.shared_head(z)
         if self.config.task_type == "regression":
             return logits.squeeze(-1)
         return logits

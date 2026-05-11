@@ -20,6 +20,7 @@ PEAK_TROUGH_TASK_TYPE = "peak_trough_classification"
 JOINT_TARGET_TASK_TYPE = "regression_peak_trough"
 R1_DROPOUT = 0.3
 PEAK_TROUGH_DROPOUT = 0.35
+JOINT_DROPOUT = 0.35
 
 MODEL_CONFIG = ModelConfig(
     hk_input_dim=29,
@@ -64,6 +65,8 @@ def make_task_model_config(task_type: str, **overrides) -> ModelConfig:
         task_defaults = {"dropout": R1_DROPOUT}
     elif task_type == PEAK_TROUGH_TASK_TYPE:
         task_defaults = {"dropout": PEAK_TROUGH_DROPOUT}
+    elif task_type == JOINT_TARGET_TASK_TYPE:
+        task_defaults = {"dropout": JOINT_DROPOUT}
     else:
         task_defaults = {}
     return replace(MODEL_CONFIG, task_type=task_type, **task_defaults, **overrides)
@@ -82,5 +85,13 @@ def make_task_train_config(task_type: str) -> TrainConfig:
         train_config.learning_rate = 5e-5
         train_config.weight_decay = 1e-3
         train_config.class_weight = [6.0, 5.0]
+        train_config.save_threshold_sweep = True
+    elif task_type == JOINT_TARGET_TASK_TYPE:
+        train_config.num_epochs = 60
+        train_config.learning_rate = 1e-4
+        train_config.weight_decay = 7e-4
+        train_config.class_weight = [6.0, 5.0]
+        train_config.r1_loss_weight = 50.0
+        train_config.peak_trough_loss_weight = 1.0
         train_config.save_threshold_sweep = True
     return train_config
