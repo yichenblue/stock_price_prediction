@@ -44,7 +44,7 @@ MODEL_CONFIG = ModelConfig(
 
 TRAIN_CONFIG = TrainConfig(
     batch_size=64,
-    num_epochs=60,
+    num_epochs=80,
     learning_rate=1e-4,
     weight_decay=7e-4,
     grad_clip_norm=1.0,
@@ -87,7 +87,7 @@ def make_task_train_config(task_type: str) -> TrainConfig:
         train_config.class_weight = [6.0, 5.0]
         train_config.save_threshold_sweep = True
     elif task_type == JOINT_TARGET_TASK_TYPE:
-        train_config.num_epochs = 60
+        train_config.num_epochs = 80
         train_config.learning_rate = 1e-4
         train_config.weight_decay = 7e-4
         train_config.class_weight = [6.0, 5.0]
